@@ -25,10 +25,12 @@ import androidx.navigation.NavHostController
 import com.artificialinsightsllc.teamsync.Auth.AuthService
 import com.artificialinsightsllc.teamsync.Navigation.NavRoutes
 import com.artificialinsightsllc.teamsync.R
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 import java.util.*
 
-
+// Assuming DarkBlue is accessible without explicit import here, based on previous conversation.
+// If not, ensure it's defined in your theme or a common object accessible without import.
 
 @Composable
 fun LoginScreen(navController: NavHostController) {
@@ -37,21 +39,34 @@ fun LoginScreen(navController: NavHostController) {
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    val darkBlue = Color(0xFF0D47A1) // Local definition for clarity, if not globally accessible via MaterialTheme.
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val authService = remember { AuthService() }
 
-    // --- ADDED LAUNCHED EFFECT BLOCK ---
-    LaunchedEffect(Unit) { // 'Unit' ensures this runs only once when the composable enters composition
-        if (authService.getCurrentUser() != null) {
-            // User is already logged in, navigate to main screen
-            navController.navigate(NavRoutes.MAIN) {
-                // Clear the back stack so the user can't go back to the login screen
-                popUpTo(NavRoutes.LOGIN) { inclusive = true }
+    // Use DisposableEffect to manage the auth state listener lifecycle
+    DisposableEffect(Unit) {
+        val listener = object : FirebaseAuth.AuthStateListener {
+            override fun onAuthStateChanged(firebaseAuth: FirebaseAuth) {
+                val user = firebaseAuth.currentUser
+                if (user != null) {
+                    // User is logged in or session restored, navigate to main screen
+                    navController.navigate(NavRoutes.MAIN) {
+                        // Clear the back stack so the user can't go back to the login screen
+                        popUpTo(NavRoutes.LOGIN) { inclusive = true }
+                    }
+                }
+                // If user is null, stay on login screen (or navigate to it if not already there)
             }
         }
+
+        authService.auth.addAuthStateListener(listener)
+
+        onDispose {
+            // Remove the listener when the composable is disposed to prevent memory leaks
+            authService.auth.removeAuthStateListener(listener)
+        }
     }
-    // --- END OF ADDED BLOCK ---
 
     Box(modifier = Modifier.fillMaxSize()) {
         Image(
@@ -79,13 +94,13 @@ fun LoginScreen(navController: NavHostController) {
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
-                label = { Text("Email", color = DarkBlue) }, // Using DarkBlue
+                label = { Text("Email", color = darkBlue) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions.Default.copy(
                     keyboardType = KeyboardType.Email,
                     imeAction = ImeAction.Next
                 ),
-                textStyle = LocalTextStyle.current.copy(color = DarkBlue), // Using DarkBlue
+                textStyle = LocalTextStyle.current.copy(color = darkBlue),
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -94,14 +109,14 @@ fun LoginScreen(navController: NavHostController) {
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Password", color = DarkBlue) }, // Using DarkBlue
+                label = { Text("Password", color = darkBlue) },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions.Default.copy(
                     keyboardType = KeyboardType.Password,
                     imeAction = ImeAction.Done
                 ),
-                textStyle = LocalTextStyle.current.copy(color = DarkBlue), // Using DarkBlue
+                textStyle = LocalTextStyle.current.copy(color = darkBlue),
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -114,9 +129,7 @@ fun LoginScreen(navController: NavHostController) {
                         val result = authService.login(email.trim(), password.trim())
                         isLoading = false
                         result.onSuccess {
-                            navController.navigate(NavRoutes.MAIN) {
-                                popUpTo(NavRoutes.LOGIN) { inclusive = true }
-                            }
+                            // Navigation is now handled by the authStateListener
                         }.onFailure {
                             errorMessage = it.message
                         }
@@ -126,7 +139,7 @@ fun LoginScreen(navController: NavHostController) {
                     .fillMaxWidth()
                     .height(50.dp),
                 shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = DarkBlue) // Using DarkBlue
+                colors = ButtonDefaults.buttonColors(containerColor = darkBlue)
             ) {
                 Text(
                     text = if (isLoading) "Logging In..." else "Login to TeamSync",
@@ -142,7 +155,7 @@ fun LoginScreen(navController: NavHostController) {
                 text = "Don't have an account? Click here",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = DarkBlue, // Using DarkBlue
+                color = darkBlue,
                 modifier = Modifier
                     .clickable {
                         navController.navigate(NavRoutes.SIGNUP)
@@ -156,7 +169,7 @@ fun LoginScreen(navController: NavHostController) {
                 text = "Forgot Password?",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = DarkBlue, // Using DarkBlue
+                color = darkBlue,
                 modifier = Modifier
                     .clickable {
                         // TODO: Implement reset password navigation
@@ -174,7 +187,7 @@ fun LoginScreen(navController: NavHostController) {
         Text(
             text = "© $currentYear TeamSync Version: $versionName",
             fontSize = 18.sp,
-            color = DarkBlue, // Using DarkBlue
+            color = darkBlue,
             fontWeight = FontWeight.Bold,
             modifier = Modifier
                 .align(Alignment.BottomCenter)

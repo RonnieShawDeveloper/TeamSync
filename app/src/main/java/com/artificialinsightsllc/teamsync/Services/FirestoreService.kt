@@ -88,12 +88,29 @@ class FirestoreService(
         }
     }
 
+    // NEW: Get all active group memberships for a specific group
+    suspend fun getGroupMembershipsForGroup(groupId: String): Result<List<GroupMembers>> {
+        return try {
+            val querySnapshot = groupMembersCollection
+                .whereEqualTo("groupId", groupId)
+                .get()
+                .await()
+            val memberships = querySnapshot.documents.mapNotNull { doc ->
+                doc.toObject(GroupMembers::class.java)?.copy(id = doc.id)
+            }
+            Result.success(memberships)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun getGroupsByIds(groupIds: List<String>): Result<List<Groups>> {
         if (groupIds.isEmpty()) {
             return Result.success(emptyList())
         }
         return try {
             val results = mutableListOf<Groups>()
+            // Firestore 'whereIn' clause has a limit of 10 items
             groupIds.chunked(10).forEach { chunk ->
                 val querySnapshot = groupsCollection.whereIn("groupID", chunk).get().await()
                 results.addAll(querySnapshot.documents.mapNotNull { doc ->
@@ -105,6 +122,47 @@ class FirestoreService(
             Result.failure(e)
         }
     }
+
+    // NEW: Get user profiles by a list of user IDs
+    suspend fun getUserProfilesByIds(userIds: List<String>): Result<List<UserModel>> {
+        if (userIds.isEmpty()) {
+            return Result.success(emptyList())
+        }
+        return try {
+            val results = mutableListOf<UserModel>()
+            // Firestore 'whereIn' clause has a limit of 10 items
+            userIds.chunked(10).forEach { chunk ->
+                val querySnapshot = usersCollection.whereIn("userId", chunk).get().await()
+                results.addAll(querySnapshot.documents.mapNotNull { doc ->
+                    doc.toObject(UserModel::class.java)
+                })
+            }
+            Result.success(results)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // NEW: Get current locations by a list of user IDs
+    suspend fun getCurrentLocationsByIds(userIds: List<String>): Result<List<Locations>> {
+        if (userIds.isEmpty()) {
+            return Result.success(emptyList())
+        }
+        return try {
+            val results = mutableListOf<Locations>()
+            // Firestore 'whereIn' clause has a limit of 10 items
+            userIds.chunked(10).forEach { chunk ->
+                val querySnapshot = currentLocationsCollection.whereIn("userId", chunk).get().await()
+                results.addAll(querySnapshot.documents.mapNotNull { doc ->
+                    doc.toObject(Locations::class.java)
+                })
+            }
+            Result.success(results)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
 
     // --- NEW: Find a group by access code and optional password ---
     suspend fun findGroupByAccessCode(accessCode: String, password: String?): Result<Groups?> {

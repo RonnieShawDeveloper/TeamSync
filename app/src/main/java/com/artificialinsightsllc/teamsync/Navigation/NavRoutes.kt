@@ -1,3 +1,4 @@
+// In file: app/src/main/java/com/artificialinsightsllc/teamsync/Navigation/NavRoutes.kt
 package com.artificialinsightsllc.teamsync.Navigation
 
 object NavRoutes {
@@ -7,4 +8,5 @@ object NavRoutes {
     const val MAIN = "main"
     const val CREATE_GROUP = "create_group"
     const val GROUPS_LIST = "groups_list"
+    const val TEAM_LIST = "team_list" // NEW ROUTE
 }

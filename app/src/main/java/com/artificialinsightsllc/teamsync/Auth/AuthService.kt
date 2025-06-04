@@ -4,7 +4,7 @@ import com.google.firebase.auth.*
 import kotlinx.coroutines.tasks.await
 
 class AuthService(
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    internal val auth: FirebaseAuth = FirebaseAuth.getInstance()
 ) {
     suspend fun login(email: String, password: String): Result<FirebaseUser> {
         return try {

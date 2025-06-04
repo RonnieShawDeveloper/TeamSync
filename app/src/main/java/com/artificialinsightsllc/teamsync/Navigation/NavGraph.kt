@@ -1,3 +1,4 @@
+// In file: app/src/main/java/com/artificialinsightsllc/teamsync/Navigation/NavGraph.kt
 package com.artificialinsightsllc.teamsync.Navigation
 
 import androidx.compose.runtime.Composable
@@ -10,31 +11,31 @@ import com.artificialinsightsllc.teamsync.Screens.LoginScreen
 import com.artificialinsightsllc.teamsync.Screens.MainScreen
 import com.artificialinsightsllc.teamsync.Screens.Signup.SignupScreen
 import com.artificialinsightsllc.teamsync.Screens.SplashScreen
+import com.artificialinsightsllc.teamsync.Screens.TeamListScreen // NEW IMPORT
 
 @Composable
 fun AppNavGraph(navController: NavHostController) {
-    NavHost(navController = navController, startDestination = NavRoutes.SPLASH) { // Still starts at SPLASH
+    NavHost(navController = navController, startDestination = NavRoutes.SPLASH) {
         composable(NavRoutes.SPLASH) {
             SplashScreen(navController)
         }
         composable(NavRoutes.LOGIN) {
-            // Assuming LoginScreen is also a class with a Content() function
-            // If LoginScreen is a direct @Composable fun, then just LoginScreen(navController) is fine.
-            LoginScreen(navController) // Please ensure this is correct based on your LoginScreen.kt
+            LoginScreen(navController)
         }
         composable(NavRoutes.SIGNUP) {
-            // Assuming SignupScreen is also a class with a Content() function
-            SignupScreen(navController) // Please ensure this is correct based on your SignupScreen.kt
+            SignupScreen(navController)
         }
         composable(NavRoutes.MAIN) {
-            // **** THIS IS THE CRUCIAL CHANGE ****
             MainScreen(navController).Content()
         }
-        composable(NavRoutes.CREATE_GROUP) { // <--- ADD THIS BLOCK
+        composable(NavRoutes.CREATE_GROUP) {
             GroupCreationScreen(navController).Content()
         }
-        composable(NavRoutes.GROUPS_LIST) { // <--- ADD THIS BLOCK
+        composable(NavRoutes.GROUPS_LIST) {
             GroupsListScreen(navController).Content()
+        }
+        composable(NavRoutes.TEAM_LIST) { // NEW BLOCK
+            TeamListScreen(navController).Content()
         }
     }
 }

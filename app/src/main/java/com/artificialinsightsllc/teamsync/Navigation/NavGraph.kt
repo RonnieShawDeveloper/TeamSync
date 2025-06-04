@@ -1,4 +1,3 @@
-// In file: app/src/main/java/com/artificialinsightsllc/teamsync/Navigation/NavGraph.kt
 package com.artificialinsightsllc.teamsync.Navigation
 
 import androidx.compose.runtime.Composable
@@ -11,7 +10,8 @@ import com.artificialinsightsllc.teamsync.Screens.LoginScreen
 import com.artificialinsightsllc.teamsync.Screens.MainScreen
 import com.artificialinsightsllc.teamsync.Screens.Signup.SignupScreen
 import com.artificialinsightsllc.teamsync.Screens.SplashScreen
-import com.artificialinsightsllc.teamsync.Screens.TeamListScreen // NEW IMPORT
+import com.artificialinsightsllc.teamsync.Screens.TeamListScreen
+import com.artificialinsightsllc.teamsync.Screens.AddMapMarkerScreen // NEW IMPORT
 
 @Composable
 fun AppNavGraph(navController: NavHostController) {
@@ -34,8 +34,11 @@ fun AppNavGraph(navController: NavHostController) {
         composable(NavRoutes.GROUPS_LIST) {
             GroupsListScreen(navController).Content()
         }
-        composable(NavRoutes.TEAM_LIST) { // NEW BLOCK
+        composable(NavRoutes.TEAM_LIST) {
             TeamListScreen(navController).Content()
+        }
+        composable(NavRoutes.ADD_MAP_MARKER) { // NEW BLOCK
+            AddMapMarkerScreen(navController).Content()
         }
     }
 }

@@ -8,5 +8,6 @@ object NavRoutes {
     const val MAIN = "main"
     const val CREATE_GROUP = "create_group"
     const val GROUPS_LIST = "groups_list"
-    const val TEAM_LIST = "team_list" // NEW ROUTE
+    const val TEAM_LIST = "team_list"
+    const val ADD_MAP_MARKER = "add_map_marker" // NEW ROUTE
 }

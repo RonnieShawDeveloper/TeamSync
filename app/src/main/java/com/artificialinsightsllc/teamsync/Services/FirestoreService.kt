@@ -5,6 +5,7 @@ import com.artificialinsightsllc.teamsync.Models.Groups
 import com.artificialinsightsllc.teamsync.Models.GroupMembers
 import com.artificialinsightsllc.teamsync.Models.Locations
 import com.artificialinsightsllc.teamsync.Models.UserModel
+import com.artificialinsightsllc.teamsync.Models.MapMarker // NEW IMPORT
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 
@@ -16,6 +17,7 @@ class FirestoreService(
     private val groupMembersCollection = db.collection("groupMembers")
     private val locationsHistoryCollection = db.collection("locationsHistory")
     private val currentLocationsCollection = db.collection("current_user_locations")
+    private val mapMarkersCollection = db.collection("mapMarkers") // NEW: Collection for map markers
 
     // --- Existing User Profile Methods ---
     suspend fun getUserProfile(uid: String): Result<UserModel> {
@@ -194,6 +196,31 @@ class FirestoreService(
         return try {
             currentLocationsCollection.document(location.userId).set(location).await()
             Result.success(null)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // NEW: Map Marker Management Methods
+    suspend fun addMapMarker(marker: MapMarker): Result<String> {
+        return try {
+            val docRef = mapMarkersCollection.add(marker).await()
+            Result.success(docRef.id)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getMapMarkersForGroup(groupId: String): Result<List<MapMarker>> {
+        return try {
+            val querySnapshot = mapMarkersCollection
+                .whereEqualTo("groupId", groupId)
+                .get()
+                .await()
+            val markers = querySnapshot.documents.mapNotNull { doc ->
+                doc.toObject(MapMarker::class.java)?.copy(id = doc.id)
+            }
+            Result.success(markers)
         } catch (e: Exception) {
             Result.failure(e)
         }

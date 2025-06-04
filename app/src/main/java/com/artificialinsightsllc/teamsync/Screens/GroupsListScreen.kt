@@ -399,7 +399,7 @@ class GroupsListScreen(private val navController: NavHostController) {
                                                         groupToLeave = group
                                                         showLeaveGroupDialog = true
                                                     },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
                                                     modifier = Modifier.wrapContentWidth()
                                                 ) {
                                                     Text("LEAVE", color = Color.White, fontSize = 12.sp)

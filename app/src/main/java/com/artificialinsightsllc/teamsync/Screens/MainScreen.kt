@@ -602,10 +602,18 @@ class MainScreen(private val navController: NavHostController) {
                     ) { Icon(Icons.Filled.Chat, "Chat Window") }
 
                     FloatingActionButton(
-                        onClick = { if (isInGroup) { toastMessage("Add Marker clicked!") } },
+                        onClick = {
+                            if (isInGroup) {
+                                // Navigate to the AddMapMarkerScreen
+                                navController.navigate(NavRoutes.ADD_MAP_MARKER) // <--- CHANGED THIS LINE
+                            } else {
+                                toastMessage("Add Marker - Must be in a Group to add markers!")
+                            }
+                        },
                         containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
                         contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
                     ) { Icon(Icons.Filled.LocationOn, "Add Marker") }
+
 
                     FloatingActionButton(
                         onClick = { navController.navigate(NavRoutes.CREATE_GROUP) },

@@ -1,3 +1,4 @@
+// In file: app/src/main/java/com/artificialinsightsllc/teamsync/Screens/LoginScreen.kt
 package com.artificialinsightsllc.teamsync.Screens
 
 import androidx.compose.foundation.Image
@@ -27,6 +28,8 @@ import com.artificialinsightsllc.teamsync.R
 import kotlinx.coroutines.launch
 import java.util.*
 
+
+
 @Composable
 fun LoginScreen(navController: NavHostController) {
     var email by remember { mutableStateOf("") }
@@ -34,12 +37,11 @@ fun LoginScreen(navController: NavHostController) {
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    val darkBlue = Color(0xFF0D47A1)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val authService = remember { AuthService() }
 
-    // --- ADD THIS LAUNCHED EFFECT BLOCK ---
+    // --- ADDED LAUNCHED EFFECT BLOCK ---
     LaunchedEffect(Unit) { // 'Unit' ensures this runs only once when the composable enters composition
         if (authService.getCurrentUser() != null) {
             // User is already logged in, navigate to main screen
@@ -77,13 +79,13 @@ fun LoginScreen(navController: NavHostController) {
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
-                label = { Text("Email", color = darkBlue) },
+                label = { Text("Email", color = DarkBlue) }, // Using DarkBlue
                 singleLine = true,
                 keyboardOptions = KeyboardOptions.Default.copy(
                     keyboardType = KeyboardType.Email,
                     imeAction = ImeAction.Next
                 ),
-                textStyle = LocalTextStyle.current.copy(color = darkBlue),
+                textStyle = LocalTextStyle.current.copy(color = DarkBlue), // Using DarkBlue
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -92,14 +94,14 @@ fun LoginScreen(navController: NavHostController) {
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Password", color = darkBlue) },
+                label = { Text("Password", color = DarkBlue) }, // Using DarkBlue
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions.Default.copy(
                     keyboardType = KeyboardType.Password,
                     imeAction = ImeAction.Done
                 ),
-                textStyle = LocalTextStyle.current.copy(color = darkBlue),
+                textStyle = LocalTextStyle.current.copy(color = DarkBlue), // Using DarkBlue
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -124,7 +126,7 @@ fun LoginScreen(navController: NavHostController) {
                     .fillMaxWidth()
                     .height(50.dp),
                 shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = darkBlue)
+                colors = ButtonDefaults.buttonColors(containerColor = DarkBlue) // Using DarkBlue
             ) {
                 Text(
                     text = if (isLoading) "Logging In..." else "Login to TeamSync",
@@ -140,7 +142,7 @@ fun LoginScreen(navController: NavHostController) {
                 text = "Don't have an account? Click here",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = darkBlue,
+                color = DarkBlue, // Using DarkBlue
                 modifier = Modifier
                     .clickable {
                         navController.navigate(NavRoutes.SIGNUP)
@@ -154,7 +156,7 @@ fun LoginScreen(navController: NavHostController) {
                 text = "Forgot Password?",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = darkBlue,
+                color = DarkBlue, // Using DarkBlue
                 modifier = Modifier
                     .clickable {
                         // TODO: Implement reset password navigation
@@ -172,7 +174,7 @@ fun LoginScreen(navController: NavHostController) {
         Text(
             text = "© $currentYear TeamSync Version: $versionName",
             fontSize = 18.sp,
-            color = darkBlue,
+            color = DarkBlue, // Using DarkBlue
             fontWeight = FontWeight.Bold,
             modifier = Modifier
                 .align(Alignment.BottomCenter)

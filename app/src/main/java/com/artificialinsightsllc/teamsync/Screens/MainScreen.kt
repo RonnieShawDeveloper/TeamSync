@@ -3,8 +3,12 @@ package com.artificialinsightsllc.teamsync.Screens
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Geocoder
 import android.location.Location
+import android.os.Build
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
@@ -98,23 +102,30 @@ import kotlinx.coroutines.tasks.await
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
 import com.artificialinsightsllc.teamsync.Screens.MarkerInfoDialog
 import com.artificialinsightsllc.teamsync.TeamSyncApplication
+import com.artificialinsightsllc.teamsync.Services.LocationTrackingService
+import java.io.IOException
+import java.util.Locale
 
 class MainScreen(private val navController: NavHostController) {
 
+    // Updated MarkerDisplayInfo to include profilePhotoUrl and LatLng
     data class MarkerDisplayInfo(
         val title: String,
         val timestamp: Long,
         val speed: Float?,
-        val bearing: Float?
+        val bearing: Float?,
+        val profilePhotoUrl: String?, // Added profilePhotoUrl
+        val latLng: LatLng? // Added LatLng
     )
 
-    @SuppressLint("MissingPermission") // Suppress lint warning, as permissions are handled at runtime
+    @SuppressLint("MissingPermission")
     @Composable
     fun Content() {
         val context = LocalContext.current
@@ -131,8 +142,8 @@ class MainScreen(private val navController: NavHostController) {
         val activeGroupMember by groupMonitorService.activeGroupMember.collectAsStateWithLifecycle()
         val userMessage by groupMonitorService.userMessage.collectAsStateWithLifecycle()
         val effectiveLocationUpdateInterval by groupMonitorService.effectiveLocationUpdateInterval.collectAsStateWithLifecycle()
+        val isLocationSharingGloballyEnabled by groupMonitorService.isLocationSharingGloballyEnabled.collectAsStateWithLifecycle()
 
-        // --- NEW: Collect other members' locations and profiles ---
         val otherMembersLocations by groupMonitorService.otherMembersLocations.collectAsStateWithLifecycle()
         val otherMembersProfiles by groupMonitorService.otherMembersProfiles.collectAsStateWithLifecycle()
 
@@ -162,6 +173,9 @@ class MainScreen(private val navController: NavHostController) {
         var hasPerformedInitialCenter by remember { mutableStateOf(false) }
 
         val coroutineScope = rememberCoroutineScope()
+
+        // NEW STATE: To manage the one-time delayed service start after permission grant
+        var shouldAttemptServiceStartAfterPermissionGrant by remember { mutableStateOf(false) }
 
         val locationCallback = remember {
             object : LocationCallback() {
@@ -194,16 +208,47 @@ class MainScreen(private val navController: NavHostController) {
             }
         }
 
+        fun startAppTrackingService(interval: Long, isSharing: Boolean) {
+            val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
+                action = LocationTrackingService.ACTION_START_SERVICE
+                putExtra(LocationTrackingService.EXTRA_LOCATION_INTERVAL, interval)
+                putExtra(LocationTrackingService.EXTRA_IS_SHARING_LOCATION, isSharing)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    context.startForegroundService(serviceIntent)
+                    Log.d("MainScreen", "Attempted to start foreground service via startForegroundService.")
+                } catch (e: Exception) {
+                    Log.e("MainScreen", "Failed to start foreground service: ${e.message}")
+                    Toast.makeText(context, "Cannot start background location service. Please open the app or grant necessary permissions.", Toast.LENGTH_LONG).show()
+                }
+            } else {
+                context.startService(serviceIntent)
+                Log.d("MainScreen", "Attempted to start service via startService (pre-Oreo).")
+            }
+        }
+
+        fun stopAppTrackingService() {
+            val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
+                action = LocationTrackingService.ACTION_STOP_SERVICE
+            }
+            context.stopService(serviceIntent)
+            Log.d("MainScreen", "Requested stop of LocationTrackingService.")
+        }
+
+
         val locationPermissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
         ) { isGranted: Boolean ->
             hasLocationPermission = isGranted
             if (isGranted) {
-                Log.d("MainScreen", "Location permission granted. Starting local GPS updates.")
-                startLocationUpdates(fusedLocationClient, locationCallback, effectiveLocationUpdateInterval)
+                Log.d("MainScreen", "Location permission granted. Setting flag to attempt FGS start.")
+                // Set flag to attempt FGS start with a delay AFTER permission is granted
+                shouldAttemptServiceStartAfterPermissionGrant = true
             } else {
                 Log.w("MainScreen", "Location permission denied by user. Local GPS updates will not start.")
                 stopLocationUpdates(fusedLocationClient, locationCallback)
+                stopAppTrackingService()
                 coroutineScope.launch {
                     groupMonitorService.updatePersonalLocationSharing(false)
                 }
@@ -234,12 +279,40 @@ class MainScreen(private val navController: NavHostController) {
                 Log.d("MainScreen", "No authenticated user found. Consider navigating to LoginScreen.")
             }
 
-            if (hasLocationPermission) {
-                startLocationUpdates(fusedLocationClient, locationCallback, effectiveLocationUpdateInterval)
-            } else {
+            if (!hasLocationPermission) {
                 showPermissionRationaleDialog = true
             }
         }
+
+        // Main LaunchedEffect: Manages LocationTrackingService lifecycle
+        // This effect will react to changes in permission status and other factors.
+        LaunchedEffect(
+            isInGroup,
+            hasLocationPermission,
+            effectiveLocationUpdateInterval,
+            isLocationSharingGloballyEnabled,
+            shouldAttemptServiceStartAfterPermissionGrant // NEW: Dependency
+        ) {
+            val currentUser = FirebaseAuth.getInstance().currentUser
+            val isUserLoggedIn = currentUser != null
+
+            // If conditions are met for FGS to run
+            if (isUserLoggedIn && isInGroup && hasLocationPermission && isLocationSharingGloballyEnabled) {
+                // If this specific trigger is due to a *fresh* permission grant, add a small delay.
+                if (shouldAttemptServiceStartAfterPermissionGrant) {
+                    Log.d("MainScreen", "Permission just granted. Delaying FGS start for 500ms to allow system to stabilize.")
+                    delay(500) // Tactical delay
+                    shouldAttemptServiceStartAfterPermissionGrant = false // Reset flag immediately after delay
+                }
+
+                Log.d("MainScreen", "Conditions met to start/maintain LocationTrackingService.")
+                startAppTrackingService(effectiveLocationUpdateInterval, isLocationSharingGloballyEnabled)
+            } else {
+                Log.d("MainScreen", "Conditions NOT met to start/maintain LocationTrackingService. Stopping if running.")
+                stopAppTrackingService()
+            }
+        }
+
 
         DisposableEffect(lifecycleOwner, fusedLocationClient, hasLocationPermission, effectiveLocationUpdateInterval) {
             val observer = LifecycleEventObserver { _, event ->
@@ -256,6 +329,7 @@ class MainScreen(private val navController: NavHostController) {
                 lifecycleOwner.lifecycle.removeObserver(observer)
                 fusedLocationClient.removeLocationUpdates(locationCallback)
                 Log.d("MainScreen", "Stopped local GPS location updates on dispose.")
+                stopAppTrackingService()
             }
         }
 
@@ -290,6 +364,7 @@ class MainScreen(private val navController: NavHostController) {
 
         var showCustomMarkerInfoDialog by remember { mutableStateOf(false) }
         var currentMarkerInfo by remember { mutableStateOf<MarkerDisplayInfo?>(null) }
+        // Removed currentMarkerAddress as geocoding now happens in MarkerInfoDialog
 
         val snackbarHostState = remember { SnackbarHostState() }
 
@@ -299,6 +374,8 @@ class MainScreen(private val navController: NavHostController) {
                 groupMonitorService.clearUserMessage()
             }
         }
+
+        // Removed LaunchedEffect for geocoding here as it's moved to MarkerInfoDialog
 
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -344,7 +421,9 @@ class MainScreen(private val navController: NavHostController) {
                                         title = it.title ?: "Unknown User",
                                         timestamp = loc.time,
                                         speed = if (loc.hasSpeed()) loc.speed else null,
-                                        bearing = if (loc.hasBearing()) loc.bearing else null
+                                        bearing = if (loc.hasBearing()) loc.bearing else null,
+                                        profilePhotoUrl = userProfilePicUrl, // Pass profile URL
+                                        latLng = userLatLng // Pass LatLng
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -359,7 +438,9 @@ class MainScreen(private val navController: NavHostController) {
                                         title = it.title ?: "Unknown User",
                                         timestamp = loc.time,
                                         speed = if (loc.hasSpeed()) loc.speed else null,
-                                        bearing = if (loc.hasBearing()) loc.bearing else null
+                                        bearing = if (loc.hasBearing()) loc.bearing else null,
+                                        profilePhotoUrl = userProfilePicUrl, // Pass profile URL
+                                        latLng = userLatLng // Pass LatLng
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -369,18 +450,15 @@ class MainScreen(private val navController: NavHostController) {
                     }
 
                     // --- NEW: Display Other Members' Markers (from Firestore) ---
-                    // Only show other members if currently in an active group
                     val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
                     if (isInGroup && currentUserId != null) {
                         otherMembersLocations.forEach { otherLoc ->
-                            // Exclude current user's own location from other members' markers
                             if (otherLoc.userId != currentUserId) {
                                 val otherMemberProfile = otherMembersProfiles[otherLoc.userId]
                                 if (otherMemberProfile != null) {
                                     val otherMemberLatLng = LatLng(otherLoc.latitude, otherLoc.longitude)
                                     val otherMarkerState = rememberMarkerState(position = otherMemberLatLng)
 
-                                    // Update marker position if location changes
                                     LaunchedEffect(otherLoc) {
                                         otherMarkerState.position = otherMemberLatLng
                                     }
@@ -403,7 +481,9 @@ class MainScreen(private val navController: NavHostController) {
                                                     title = it.title ?: "Unknown Member",
                                                     timestamp = otherLoc.timestamp,
                                                     speed = otherLoc.speed,
-                                                    bearing = otherLoc.bearing
+                                                    bearing = otherLoc.bearing,
+                                                    profilePhotoUrl = otherProfilePicUrl, // Pass profile URL
+                                                    latLng = otherMemberLatLng // Pass LatLng
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -419,7 +499,9 @@ class MainScreen(private val navController: NavHostController) {
                                                     title = it.title ?: "Unknown Member",
                                                     timestamp = otherLoc.timestamp,
                                                     speed = otherLoc.speed,
-                                                    bearing = otherLoc.bearing
+                                                    bearing = otherLoc.bearing,
+                                                    profilePhotoUrl = otherProfilePicUrl, // Pass profile URL
+                                                    latLng = otherMemberLatLng // Pass LatLng
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -456,7 +538,7 @@ class MainScreen(private val navController: NavHostController) {
                         )
                         val groupNameText = activeGroup?.groupName ?: "No Active Group"
                         Text(
-                            text = "ACTIVE GROUP: "+groupNameText, // Added "ACTIVE GROUP: "
+                            text = "ACTIVE GROUP: "+groupNameText,
                             color = Color.DarkGray,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
@@ -566,7 +648,15 @@ class MainScreen(private val navController: NavHostController) {
                     ) { Icon(Icons.Filled.Polyline, "Add GeoFence") }
 
                     FloatingActionButton(
-                        onClick = { if (isInGroup) { toastMessage("Team List clicked!") } },
+                        onClick = {
+                            if (isInGroup) {
+                                // Navigate to the TeamListScreen
+                                navController.navigate(NavRoutes.TEAM_LIST) // <--- CHANGED THIS LINE
+                            } else {
+                                // This is the existing behavior for when not in a group
+                                toastMessage("Team List - Must be in a Group to view!")
+                            }
+                        },
                         containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
                         contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
                     ) { Icon(Icons.Filled.People, "Team List") }
@@ -592,7 +682,9 @@ class MainScreen(private val navController: NavHostController) {
 
                 if (showCustomMarkerInfoDialog && currentMarkerInfo != null) {
                     MarkerInfoDialog(
+                        profilePhotoUrl = currentMarkerInfo!!.profilePhotoUrl, // Pass profile URL
                         title = currentMarkerInfo!!.title,
+                        latLng = currentMarkerInfo!!.latLng, // Pass LatLng
                         timestamp = currentMarkerInfo!!.timestamp,
                         speed = currentMarkerInfo!!.speed,
                         bearing = currentMarkerInfo!!.bearing,

@@ -1,15 +1,54 @@
-*.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# Built application files
+*.apk
+*.ap_
+*.aab
+*.aar
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+/build/
+.gradle/
+.idea/
+.cxx/
+.externalNativeBuild/
 local.properties
+.DS_Store
+/captures/
+/app/build/
+/app/.cxx/
+/app/.externalNativeBuild/
+/app/local.properties
+/app/.DS_Store
+
+# Android Studio project files
+*.iml
+*.iws
+*.ipr
+.idea/workspace.xml
+.idea/libraries/
+.idea/modules.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+.idea/caches/
+
+# Gradle files
+.gradle/
+gradle-wrapper.jar
+
+# Keystore files
+*.jks
+*.keystore
+
+# Local test results
+/app/test-results/
+/app/outputs/
+/app/intermediates/
+
+# Any other files you want to ignore
+# For example, if you have a debug.keystore in your project root
+# debug.keystore

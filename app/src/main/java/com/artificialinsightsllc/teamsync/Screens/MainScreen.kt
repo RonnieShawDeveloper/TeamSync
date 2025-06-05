@@ -91,6 +91,8 @@ import com.artificialinsightsllc.teamsync.Navigation.NavRoutes
 import com.artificialinsightsllc.teamsync.R
 import com.artificialinsightsllc.teamsync.Models.UserModel
 import com.artificialinsightsllc.teamsync.Models.Locations
+import com.artificialinsightsllc.teamsync.Models.MapMarker // NEW IMPORT
+import com.artificialinsightsllc.teamsync.Models.MapMarkerType // NEW IMPORT
 import com.artificialinsightsllc.teamsync.Helpers.MarkerIconHelper
 import com.artificialinsightsllc.teamsync.Helpers.TimeFormatter
 import com.artificialinsightsllc.teamsync.Helpers.UnitConverter
@@ -112,17 +114,18 @@ import com.artificialinsightsllc.teamsync.TeamSyncApplication
 import com.artificialinsightsllc.teamsync.Services.LocationTrackingService
 import java.io.IOException
 import java.util.Locale
+import com.artificialinsightsllc.teamsync.Services.MarkerMonitorService // NEW IMPORT
 
 class MainScreen(private val navController: NavHostController) {
 
-    // Updated MarkerDisplayInfo to include profilePhotoUrl and LatLng
     data class MarkerDisplayInfo(
         val title: String,
         val timestamp: Long,
         val speed: Float?,
         val bearing: Float?,
-        val profilePhotoUrl: String?, // Added profilePhotoUrl
-        val latLng: LatLng? // Added LatLng
+        val profilePhotoUrl: String?,
+        val latLng: LatLng?,
+        val mapMarker: MapMarker? = null // Added MapMarker for marker info dialog
     )
 
     @SuppressLint("MissingPermission")
@@ -135,6 +138,7 @@ class MainScreen(private val navController: NavHostController) {
         }
 
         val groupMonitorService = (context.applicationContext as TeamSyncApplication).groupMonitorService
+        val markerMonitorService = (context.applicationContext as TeamSyncApplication).markerMonitorService // Get MarkerMonitorService
         val firestoreService = remember { FirestoreService() }
 
         val isInGroup by groupMonitorService.isInActiveGroup.collectAsStateWithLifecycle()
@@ -146,7 +150,8 @@ class MainScreen(private val navController: NavHostController) {
 
         val otherMembersLocations by groupMonitorService.otherMembersLocations.collectAsStateWithLifecycle()
         val otherMembersProfiles by groupMonitorService.otherMembersProfiles.collectAsStateWithLifecycle()
-
+        val mapMarkers by markerMonitorService.mapMarkers.collectAsStateWithLifecycle() // Collect map markers
+        Log.d("MainScreen", "Collected ${mapMarkers.size} map markers.") // Added log
 
         var userLocation by remember { mutableStateOf<Location?>(null) }
 
@@ -176,6 +181,11 @@ class MainScreen(private val navController: NavHostController) {
 
         // NEW STATE: To manage the one-time delayed service start after permission grant
         var shouldAttemptServiceStartAfterPermissionGrant by remember { mutableStateOf(false) }
+
+        // NEW STATE: For expired group dialog
+        var showExpiredGroupDialog by remember { mutableStateOf(false) }
+        var expiredGroupDialogMessage by remember { mutableStateOf<String?>(null) }
+
 
         val locationCallback = remember {
             object : LocationCallback() {
@@ -291,7 +301,7 @@ class MainScreen(private val navController: NavHostController) {
             hasLocationPermission,
             effectiveLocationUpdateInterval,
             isLocationSharingGloballyEnabled,
-            shouldAttemptServiceStartAfterPermissionGrant // NEW: Dependency
+            shouldAttemptServiceStartAfterPermissionGrant
         ) {
             val currentUser = FirebaseAuth.getInstance().currentUser
             val isUserLoggedIn = currentUser != null
@@ -364,18 +374,21 @@ class MainScreen(private val navController: NavHostController) {
 
         var showCustomMarkerInfoDialog by remember { mutableStateOf(false) }
         var currentMarkerInfo by remember { mutableStateOf<MarkerDisplayInfo?>(null) }
-        // Removed currentMarkerAddress as geocoding now happens in MarkerInfoDialog
 
         val snackbarHostState = remember { SnackbarHostState() }
 
         LaunchedEffect(userMessage) {
             userMessage?.let { message ->
-                snackbarHostState.showSnackbar(message)
+                // Check for the specific expired group message
+                if (message.contains("has expired. You have been automatically removed.")) {
+                    expiredGroupDialogMessage = message
+                    showExpiredGroupDialog = true
+                } else {
+                    snackbarHostState.showSnackbar(message)
+                }
                 groupMonitorService.clearUserMessage()
             }
         }
-
-        // Removed LaunchedEffect for geocoding here as it's moved to MarkerInfoDialog
 
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -422,8 +435,8 @@ class MainScreen(private val navController: NavHostController) {
                                         timestamp = loc.time,
                                         speed = if (loc.hasSpeed()) loc.speed else null,
                                         bearing = if (loc.hasBearing()) loc.bearing else null,
-                                        profilePhotoUrl = userProfilePicUrl, // Pass profile URL
-                                        latLng = userLatLng // Pass LatLng
+                                        profilePhotoUrl = userProfilePicUrl,
+                                        latLng = userLatLng
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -439,8 +452,8 @@ class MainScreen(private val navController: NavHostController) {
                                         timestamp = loc.time,
                                         speed = if (loc.hasSpeed()) loc.speed else null,
                                         bearing = if (loc.hasBearing()) loc.bearing else null,
-                                        profilePhotoUrl = userProfilePicUrl, // Pass profile URL
-                                        latLng = userLatLng // Pass LatLng
+                                        profilePhotoUrl = userProfilePicUrl,
+                                        latLng = userLatLng
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -449,7 +462,7 @@ class MainScreen(private val navController: NavHostController) {
                         }
                     }
 
-                    // --- NEW: Display Other Members' Markers (from Firestore) ---
+                    // --- Display Other Members' Markers (from Firestore) ---
                     val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
                     if (isInGroup && currentUserId != null) {
                         otherMembersLocations.forEach { otherLoc ->
@@ -482,8 +495,8 @@ class MainScreen(private val navController: NavHostController) {
                                                     timestamp = otherLoc.timestamp,
                                                     speed = otherLoc.speed,
                                                     bearing = otherLoc.bearing,
-                                                    profilePhotoUrl = otherProfilePicUrl, // Pass profile URL
-                                                    latLng = otherMemberLatLng // Pass LatLng
+                                                    profilePhotoUrl = otherProfilePicUrl,
+                                                    latLng = otherMemberLatLng
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -500,8 +513,8 @@ class MainScreen(private val navController: NavHostController) {
                                                     timestamp = otherLoc.timestamp,
                                                     speed = otherLoc.speed,
                                                     bearing = otherLoc.bearing,
-                                                    profilePhotoUrl = otherProfilePicUrl, // Pass profile URL
-                                                    latLng = otherMemberLatLng // Pass LatLng
+                                                    profilePhotoUrl = otherProfilePicUrl,
+                                                    latLng = otherMemberLatLng
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -509,6 +522,44 @@ class MainScreen(private val navController: NavHostController) {
                                         )
                                     }
                                 }
+                            }
+                        }
+
+                        // NEW: Display Map Markers - MOVED THIS BLOCK
+                        mapMarkers.forEach { mapMarker ->
+                            val markerLatLng = LatLng(mapMarker.latitude, mapMarker.longitude)
+                            val markerState = rememberMarkerState(position = markerLatLng)
+
+                            // RE-ADDED LaunchedEffect for explicit position updates
+                            LaunchedEffect(mapMarker.id, mapMarker.latitude, mapMarker.longitude) {
+                                markerState.position = markerLatLng
+                            }
+
+                            val mapMarkerIcon = MarkerIconHelper.rememberMapMarkerIcon(
+                                markerType = mapMarker.markerType,
+                                cameraBearing = mapMarker.cameraBearing
+                            )
+
+                            if (mapMarkerIcon != null) {
+                                Marker(
+                                    state = markerState,
+                                    title = mapMarker.message, // Using message as title for simplicity
+                                    icon = mapMarkerIcon,
+                                    anchor = Offset(0.5f, 0.5f), // Center anchor for circular markers
+                                    onClick = {
+                                        currentMarkerInfo = MarkerDisplayInfo(
+                                            title = mapMarker.message,
+                                            timestamp = mapMarker.timestamp,
+                                            speed = null, // Map markers don't have speed/bearing like live users
+                                            bearing = mapMarker.cameraBearing, // Use camera bearing for photo markers
+                                            profilePhotoUrl = mapMarker.photoUrl, // Use photoUrl for photo markers
+                                            latLng = markerLatLng,
+                                            mapMarker = mapMarker // Pass the full map marker object
+                                        )
+                                        showCustomMarkerInfoDialog = true
+                                        true
+                                    }
+                                )
                             }
                         }
                     }
@@ -573,7 +624,7 @@ class MainScreen(private val navController: NavHostController) {
                                             .bearing(0f)
                                             .build()
                                         cameraPositionState.animate(
-                                            CameraUpdateFactory.newCameraPosition(newCameraPosition)
+                                            CameraUpdateFactory.newLatLngZoom(newLatLng, 15f)
                                         )
                                     }
                                     toastMessage("Map Locked to User Location")
@@ -604,8 +655,7 @@ class MainScreen(private val navController: NavHostController) {
                     FloatingActionButton(
                         onClick = {
                             if (isInGroup) {
-                                // Navigate to the AddMapMarkerScreen
-                                navController.navigate(NavRoutes.ADD_MAP_MARKER) // <--- CHANGED THIS LINE
+                                navController.navigate(NavRoutes.ADD_MAP_MARKER)
                             } else {
                                 toastMessage("Add Marker - Must be in a Group to add markers!")
                             }
@@ -613,7 +663,6 @@ class MainScreen(private val navController: NavHostController) {
                         containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
                         contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
                     ) { Icon(Icons.Filled.LocationOn, "Add Marker") }
-
 
                     FloatingActionButton(
                         onClick = { navController.navigate(NavRoutes.CREATE_GROUP) },
@@ -658,10 +707,8 @@ class MainScreen(private val navController: NavHostController) {
                     FloatingActionButton(
                         onClick = {
                             if (isInGroup) {
-                                // Navigate to the TeamListScreen
-                                navController.navigate(NavRoutes.TEAM_LIST) // <--- CHANGED THIS LINE
+                                navController.navigate(NavRoutes.TEAM_LIST)
                             } else {
-                                // This is the existing behavior for when not in a group
                                 toastMessage("Team List - Must be in a Group to view!")
                             }
                         },
@@ -689,14 +736,44 @@ class MainScreen(private val navController: NavHostController) {
                 }
 
                 if (showCustomMarkerInfoDialog && currentMarkerInfo != null) {
-                    MarkerInfoDialog(
-                        profilePhotoUrl = currentMarkerInfo!!.profilePhotoUrl, // Pass profile URL
-                        title = currentMarkerInfo!!.title,
-                        latLng = currentMarkerInfo!!.latLng, // Pass LatLng
-                        timestamp = currentMarkerInfo!!.timestamp,
-                        speed = currentMarkerInfo!!.speed,
-                        bearing = currentMarkerInfo!!.bearing,
-                        onDismissRequest = { showCustomMarkerInfoDialog = false }
+                    // Check if it's a regular user marker or a MapMarker
+                    if (currentMarkerInfo!!.mapMarker == null) {
+                        // Existing user marker dialog
+                        MarkerInfoDialog(
+                            profilePhotoUrl = currentMarkerInfo!!.profilePhotoUrl,
+                            title = currentMarkerInfo!!.title,
+                            latLng = currentMarkerInfo!!.latLng,
+                            timestamp = currentMarkerInfo!!.timestamp,
+                            speed = currentMarkerInfo!!.speed,
+                            bearing = currentMarkerInfo!!.bearing,
+                            onDismissRequest = { showCustomMarkerInfoDialog = false }
+                        )
+                    } else {
+                        // New MapMarker dialog
+                        MapMarkerInfoDialog( // NEW: Use a new dialog for MapMarkers
+                            mapMarker = currentMarkerInfo!!.mapMarker!!,
+                            onDismissRequest = { showCustomMarkerInfoDialog = false }
+                        )
+                    }
+                }
+
+                // Expired Group Dialog
+                if (showExpiredGroupDialog && expiredGroupDialogMessage != null) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            showExpiredGroupDialog = false
+                            groupMonitorService.clearUserMessage() // Clear the message after dialog dismissal
+                        },
+                        title = { Text("Group Expired") },
+                        text = { Text(expiredGroupDialogMessage!!) },
+                        confirmButton = {
+                            Button(onClick = {
+                                showExpiredGroupDialog = false
+                                groupMonitorService.clearUserMessage() // Clear the message after dialog dismissal
+                            }) {
+                                Text("OK")
+                            }
+                        }
                     )
                 }
             }

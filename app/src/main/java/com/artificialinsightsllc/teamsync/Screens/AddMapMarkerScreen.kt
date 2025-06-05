@@ -73,7 +73,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -88,6 +87,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
@@ -108,7 +108,7 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.maps.model.LatLng
-import id.zelory.compressor.Compressor // For image compression
+import id.zelory.compressor.Compressor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -121,7 +121,18 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
+
 class AddMapMarkerScreen(private val navController: NavHostController) {
+
+    // Define a Saver for Uri
+    private val UriSaver = Saver<Uri?, String>(
+        save = { it?.toString() },
+        restore = { it?.let { Uri.parse(it) } }
+    )
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
@@ -138,12 +149,15 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
         var selectedTabIndex by remember { mutableIntStateOf(0) } // 0 for Chat, 1 for Photo
         var chatMessage by remember { mutableStateOf("") }
+        // FIX: Change to val and remove 'by' to get the MutableState object itself
+        val capturedImageUriState = rememberSaveable(stateSaver = UriSaver) { mutableStateOf<Uri?>(null) }
         var photoMessage by remember { mutableStateOf("") }
-        var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
         var isLoading by remember { mutableStateOf(false) }
         var showScreen by remember { mutableStateOf(false) } // For animation visibility
 
-        var showPermissionRationaleDialog by remember { mutableStateOf(false) }
+        var showGeneralPermissionRationaleDialog by remember { mutableStateOf(false) }
+        var generalPermissionRationaleText by remember { mutableStateOf("") }
+
         var hasCameraPermission by remember {
             mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
         }
@@ -172,9 +186,8 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
         val cropResultLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
-                val resultUri = UCrop.getOutput(result.data!!)
-                capturedImageUri = resultUri
-                Log.d("AddMapMarkerScreen", "Image cropped and captured: $capturedImageUri")
+                capturedImageUriState.value = UCrop.getOutput(result.data!!) // Update value via .value
+                Log.d("AddMapMarkerScreen", "Image cropped and captured: ${capturedImageUriState.value}")
             } else if (result.resultCode == UCrop.RESULT_ERROR) {
                 val cropError = UCrop.getError(result.data!!)
                 Log.e("AddMapMarkerScreen", "UCrop error: $cropError")
@@ -183,26 +196,27 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         }
 
         val takePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-            if (success && capturedImageUri != null) {
-                // Photo taken, now launch uCrop for square cropping and compression
+            // capturedImageUriState.value is set by launchCamera BEFORE this callback returns.
+            // So we just check 'success' and proceed with UCrop if true.
+            if (success) {
                 val destinationUri = Uri.fromFile(File(context.cacheDir, "cropped_marker_image_${UUID.randomUUID()}.jpg"))
                 val options = UCrop.Options().apply {
-                    setCompressionQuality(70) // Compress to 70%
-                    setHideBottomControls(false) // Show controls for user to adjust if needed
-                    setFreeStyleCropEnabled(false) // Disable free style cropping
+                    setCompressionQuality(70)
+                    setHideBottomControls(false)
+                    setFreeStyleCropEnabled(false)
                     setToolbarTitle("Crop Photo Marker")
-                    setToolbarColor(Color(0xFF0D47A1).toArgb()) // Using hardcoded DarkBlue
-                    setStatusBarColor(Color(0xFF0D47A1).toArgb()) // Using hardcoded DarkBlue
+                    setToolbarColor(Color(0xFF0D47A1).toArgb())
+                    setStatusBarColor(Color(0xFF0D47A1).toArgb())
                     setToolbarWidgetColor(Color.White.toArgb())
                 }
-                val intent = UCrop.of(capturedImageUri!!, destinationUri)
-                    .withAspectRatio(1f, 1f) // Applied here directly on UCrop instance
+                val intent = UCrop.of(capturedImageUriState.value!!, destinationUri) // Use value
+                    .withAspectRatio(1f, 1f)
                     .withOptions(options)
                     .getIntent(context)
                 cropResultLauncher.launch(intent)
             } else {
                 Toast.makeText(context, "Failed to capture photo.", Toast.LENGTH_SHORT).show()
-                capturedImageUri = null // Clear URI if capture failed
+                capturedImageUriState.value = null // Clear URI if capture failed
             }
         }
 
@@ -211,8 +225,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         ) { isGranted: Boolean ->
             hasCameraPermission = isGranted
             if (isGranted) {
-                // If camera permission granted, launch camera
-                launchCamera(context, takePhotoLauncher) // Corrected call
+                launchCamera(context, takePhotoLauncher, capturedImageUriState) // Pass the state object
             } else {
                 Toast.makeText(context, "Camera permission is required to take photos.", Toast.LENGTH_SHORT).show()
             }
@@ -223,7 +236,6 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         ) { isGranted: Boolean ->
             hasLocationPermission = isGranted
             if (isGranted) {
-                // If location permission granted, start location updates
                 startLocationUpdates(fusedLocationClient, locationCallback)
             } else {
                 Toast.makeText(context, "Location permission is required to geotag photos.", Toast.LENGTH_SHORT).show()
@@ -232,17 +244,12 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
             }
         }
 
-
-
-
-
-
         // Lifecycle observer for location updates
         val lifecycleOwner = LocalLifecycleOwner.current
-        DisposableEffect(lifecycleOwner, hasLocationPermission) {
+        DisposableEffect(lifecycleOwner, hasLocationPermission, selectedTabIndex) {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_START) {
-                    if (hasLocationPermission) {
+                    if (hasLocationPermission && (selectedTabIndex == 1 || currentLatLng == null)) {
                         startLocationUpdates(fusedLocationClient, locationCallback)
                     }
                 } else if (event == Lifecycle.Event.ON_STOP) {
@@ -257,17 +264,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         }
 
         LaunchedEffect(Unit) {
-            showScreen = true // Trigger slide-in animation
-            // Request permissions on screen entry if not already granted
-            if (!hasCameraPermission) {
-                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-            }
-            if (!hasLocationPermission) {
-                locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-            } else {
-                // If permission already granted, ensure location updates start
-                startLocationUpdates(fusedLocationClient, locationCallback)
-            }
+            showScreen = true
         }
 
         AnimatedVisibility(
@@ -301,19 +298,19 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                     ) {
                         IconButton(onClick = {
                             coroutineScope.launch {
-                                showScreen = false // Trigger slide-out animation
-                                delay(550) // Wait for animation to complete
+                                showScreen = false
+                                delay(550)
                                 navController.popBackStack()
                             }
                         }) {
-                            Icon(Icons.Filled.ArrowBack, "Back to Map", tint = Color(0xFF0D47A1)) // Using hardcoded DarkBlue
+                            Icon(Icons.Filled.ArrowBack, "Back to Map", tint = Color(0xFF0D47A1))
                         }
                         Spacer(Modifier.width(8.dp))
                         Text(
                             text = "Add Map Marker",
                             fontSize = 28.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFF0D47A1), // Using hardcoded DarkBlue
+                            color = Color(0xFF0D47A1),
                             textAlign = TextAlign.Center,
                             modifier = Modifier.weight(1f)
                         )
@@ -322,16 +319,47 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
                     Spacer(Modifier.height(16.dp))
 
-                    TabRow(selectedTabIndex = selectedTabIndex) {
+                    TabRow(
+                        selectedTabIndex = selectedTabIndex,
+                        containerColor = Color(0xFF0D47A1)
+                    ) {
                         Tab(
                             selected = selectedTabIndex == 0,
-                            onClick = { selectedTabIndex = 0 },
-                            text = { Text("Chat Marker", color = Color(0xFF0D47A1)) } // Using hardcoded DarkBlue
+                            onClick = {
+                                selectedTabIndex = 0
+                                if (!hasLocationPermission) {
+                                    if (ActivityCompat.shouldShowRequestPermissionRationale(context as Activity, Manifest.permission.ACCESS_FINE_LOCATION)) {
+                                        generalPermissionRationaleText = "Location (Precise) is recommended for chat markers to accurately pinpoint their location. Please grant this permission."
+                                        showGeneralPermissionRationaleDialog = true
+                                    } else {
+                                        locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                    }
+                                } else {
+                                    startLocationUpdates(fusedLocationClient, locationCallback)
+                                }
+                            },
+                            text = { Text("Chat Marker", color = Color.White) },
+                            selectedContentColor = Color.White,
+                            unselectedContentColor = Color.White.copy(alpha = 0.7f)
                         )
                         Tab(
                             selected = selectedTabIndex == 1,
-                            onClick = { selectedTabIndex = 1 },
-                            text = { Text("Photo Marker", color = Color(0xFF0D47A1)) } // Using hardcoded DarkBlue
+                            onClick = {
+                                selectedTabIndex = 1
+                                if (!hasLocationPermission) {
+                                    if (ActivityCompat.shouldShowRequestPermissionRationale(context as Activity, Manifest.permission.ACCESS_FINE_LOCATION)) {
+                                        generalPermissionRationaleText = "Location (Precise) is essential for geotagging your photo markers on the map. Please grant this permission."
+                                        showGeneralPermissionRationaleDialog = true
+                                    } else {
+                                        locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                    }
+                                } else {
+                                    startLocationUpdates(fusedLocationClient, locationCallback)
+                                }
+                            },
+                            text = { Text("Photo Marker", color = Color.White) },
+                            selectedContentColor = Color.White,
+                            unselectedContentColor = Color.White.copy(alpha = 0.7f)
                         )
                     }
 
@@ -382,9 +410,9 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                         .background(Color.LightGray),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (capturedImageUri != null) {
+                                    if (capturedImageUriState.value != null) { // Access value via .value
                                         Image(
-                                            bitmap = BitmapFactory.decodeStream(context.contentResolver.openInputStream(capturedImageUri!!)).asImageBitmap(),
+                                            bitmap = BitmapFactory.decodeStream(context.contentResolver.openInputStream(capturedImageUriState.value!!)).asImageBitmap(),
                                             contentDescription = "Captured Photo",
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()
@@ -399,9 +427,14 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                     FloatingActionButton(
                                         onClick = {
                                             if (hasCameraPermission) {
-                                                launchCamera(context, takePhotoLauncher)
+                                                launchCamera(context, takePhotoLauncher, capturedImageUriState) // Pass the state object
                                             } else {
-                                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                                if (ActivityCompat.shouldShowRequestPermissionRationale(context as Activity, Manifest.permission.CAMERA)) {
+                                                    generalPermissionRationaleText = "Camera access is needed to take a photo for your map marker. Please grant this permission."
+                                                    showGeneralPermissionRationaleDialog = true
+                                                } else {
+                                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                                }
                                             }
                                         },
                                         modifier = Modifier.align(Alignment.Center)
@@ -435,7 +468,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
                             Button(
                                 onClick = {
-                                    if (isLoading) return@Button // Prevent double-click
+                                    if (isLoading) return@Button
                                     isLoading = true
 
                                     val groupId = activeGroup?.groupID
@@ -446,6 +479,12 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                         isLoading = false
                                         return@Button
                                     }
+                                    if (selectedTabIndex == 1 && !hasLocationPermission) {
+                                        Toast.makeText(context, "Location permission is required to post photo markers with geotagging.", Toast.LENGTH_LONG).show()
+                                        isLoading = false
+                                        return@Button
+                                    }
+
 
                                     coroutineScope.launch {
                                         try {
@@ -476,7 +515,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                                 }
 
                                             } else { // Photo Marker
-                                                if (capturedImageUri == null) {
+                                                if (capturedImageUriState.value == null) { // Access value via .value
                                                     Toast.makeText(context, "Please take a photo first.", Toast.LENGTH_SHORT).show()
                                                     isLoading = false
                                                     return@launch
@@ -489,7 +528,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
                                                 // Upload photo to Firebase Storage
                                                 val photoRef = firebaseStorage.reference.child("map_markers/${groupId}/${newMarkerId}.jpg")
-                                                val uploadResult = photoRef.putFile(capturedImageUri!!).await()
+                                                val uploadResult = photoRef.putFile(capturedImageUriState.value!!).await() // Access value via .value
                                                 val photoUrl = uploadResult.storage.downloadUrl.await().toString()
 
                                                 markerToSave = MapMarker(
@@ -523,7 +562,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                     .fillMaxWidth(0.7f)
                                     .height(50.dp),
                                 shape = RoundedCornerShape(24.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D47A1)), // Using hardcoded DarkBlue
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D47A1)),
                                 enabled = !isLoading
                             ) {
                                 if (isLoading) {
@@ -536,6 +575,33 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                     }
                 }
             }
+        }
+
+        // General Permission Rationale Dialog
+        if (showGeneralPermissionRationaleDialog && generalPermissionRationaleText.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = { showGeneralPermissionRationaleDialog = false },
+                title = { Text("Permission Required") },
+                text = { Text(generalPermissionRationaleText) },
+                confirmButton = {
+                    Button(onClick = {
+                        showGeneralPermissionRationaleDialog = false
+                        // Determine which launcher to use based on the text/context
+                        if (generalPermissionRationaleText.contains("Camera access")) {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        } else if (generalPermissionRationaleText.contains("Location (Precise)")) {
+                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                        }
+                    }) {
+                        Text("Continue")
+                    }
+                },
+                dismissButton = {
+                    Button(onClick = { showGeneralPermissionRationaleDialog = false }) {
+                        Text("Not Now")
+                    }
+                }
+            )
         }
     }
 
@@ -570,10 +636,15 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
     private fun launchCamera(
         context: Context,
-        takePhotoLauncher: ActivityResultLauncher<Uri> // Parameter added here
+        takePhotoLauncher: ActivityResultLauncher<Uri>,
+        outUriState: MutableState<Uri?> // FIX: Accept MutableState<Uri?>
     ) {
-        val photoFile = File(context.cacheDir, "temp_marker_photo_${UUID.randomUUID()}.jpg")
+        // FIX: Store the file in context.filesDir for persistence across process death
+        val photoFile = File(context.filesDir, "temp_marker_photo_${UUID.randomUUID()}.jpg")
         val photoUri = FileProvider.getUriForFile(context, "${context.packageName}.provider", photoFile)
+
+        // FIX: Update the value of the MutableState using .value
+        outUriState.value = photoUri
         takePhotoLauncher.launch(photoUri)
     }
 }

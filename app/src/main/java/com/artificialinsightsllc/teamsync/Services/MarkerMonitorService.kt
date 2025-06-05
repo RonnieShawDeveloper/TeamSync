@@ -30,6 +30,7 @@ class MarkerMonitorService(
      * @param groupId The ID of the group to monitor markers for.
      */
     fun startMonitoringMarkers(groupId: String) {
+        Log.d("MarkerMonitorService", "startMonitoringMarkers called for groupId: $groupId") // ADD THIS LOG
         if (currentGroupId == groupId) {
             Log.d("MarkerMonitorService", "Already monitoring markers for group $groupId. No change needed.")
             return

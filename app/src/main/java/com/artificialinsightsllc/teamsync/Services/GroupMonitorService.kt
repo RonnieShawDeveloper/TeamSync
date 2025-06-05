@@ -31,7 +31,8 @@ class GroupMonitorService(
     private val firestoreService: FirestoreService = FirestoreService(),
     internal val auth: FirebaseAuth = FirebaseAuth.getInstance(),
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
-    private val markerMonitorService: MarkerMonitorService = MarkerMonitorService() // NEW: Inject MarkerMonitorService
+    // NEW: Accept MarkerMonitorService as a parameter instead of creating a new one
+    private val markerMonitorService: MarkerMonitorService
 ) {
     private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -62,8 +63,8 @@ class GroupMonitorService(
     private val _userMessage = MutableStateFlow<String?>(null)
     val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
 
-    // NEW: Flag to indicate if initial group membership data has been loaded
     private val _isInitialGroupMembershipLoaded = MutableStateFlow(false)
+    private val _expectedActiveGroupId = MutableStateFlow<String?>(null)
 
 
     private var currentUserGroupMembershipsListener: ListenerRegistration? = null
@@ -101,19 +102,34 @@ class GroupMonitorService(
         Log.d("GroupMonitorService", "Stopped other members' data listeners.")
     }
 
-    private fun stopAllListeners() {
+    fun stopAllListeners() {
         currentUserGroupMembershipsListener?.remove()
         currentUserGroupMembershipsListener = null
         activeGroupDetailsListener?.remove()
         activeGroupDetailsListener = null
         stopOtherMembersListeners()
-        markerMonitorService.stopMonitoringMarkers() // NEW: Stop marker monitoring
+        markerMonitorService.stopMonitoringMarkers()
         Log.d("GroupMonitorService", "Stopped all Firestore listeners.")
-        _isInitialGroupMembershipLoaded.value = false // Reset flag on full stop
+        _isInitialGroupMembershipLoaded.value = false
+        _expectedActiveGroupId.value = null
     }
 
-
-    private fun startMonitoring() {
+    /**
+     * Starts monitoring group data. Can be called with an expectedGroupId when creating a new group
+     * to prevent premature state evaluation.
+     * @param expectedGroupId If provided, the service will wait for this specific group to become active
+     * before considering initial data loaded.
+     */
+    fun startMonitoring(expectedGroupId: String? = null) {
+        if (expectedGroupId != null) {
+            Log.d("GroupMonitorService", "Setting expected active group ID: $expectedGroupId")
+            _expectedActiveGroupId.value = expectedGroupId
+            _isInitialGroupMembershipLoaded.value = false // Ensure it waits for the new group
+        } else {
+            if (_expectedActiveGroupId.value == null) {
+                _isInitialGroupMembershipLoaded.value = false // Reset to allow re-evaluation if needed
+            }
+        }
         monitorScope.launch {
             auth.addAuthStateListener { firebaseAuth ->
                 val user = firebaseAuth.currentUser
@@ -132,22 +148,75 @@ class GroupMonitorService(
             }
         }
 
+
         monitorScope.launch {
             combine(
                 _activeGroupMember,
                 _activeGroup,
                 _isLocationSharingGloballyEnabled,
-                _isInitialGroupMembershipLoaded // NEW: Add initial data loaded flag
-            ) { member, group, isSharingGloballyEnabled, isInitialLoad -> // Unpack the new flow
-                // NEW: Only proceed if initial data has been loaded
-                if (!isInitialLoad) {
-                    Log.d("GroupMonitorService", "Combine waiting for initial data load...")
+                _isInitialGroupMembershipLoaded,
+                _expectedActiveGroupId
+            ) { member, group, isSharingGloballyEnabled, isInitialLoad, expectedId ->
+                val currentUserId = auth.currentUser?.uid
+
+                val actualIsInitialLoadComplete = if (expectedId != null) {
+                    val isExpectedMemberActive = member?.groupId == expectedId && member.unjoinedTimestamp == null
+                    val isExpectedGroupActive = group?.groupID == expectedId && (group.groupEndTimestamp?.let { it > System.currentTimeMillis() } ?: true)
+                    isExpectedMemberActive && isExpectedGroupActive
+                } else {
+                    member != null && group != null
+                }
+
+                if (!actualIsInitialLoadComplete && !_isInitialGroupMembershipLoaded.value) { // Keep waiting if not initial load complete OR the flag isn't set
+                    Log.d("GroupMonitorService", "Combine waiting for initial data load or expected group ($expectedId) to become active. Current: member=${member?.groupId}, group=${group?.groupID}")
                     return@combine
                 }
 
-                val groupIsValidAndActive = group != null && (group.groupEndTimestamp?.let { it > System.currentTimeMillis() } ?: true)
+                if (actualIsInitialLoadComplete && !_isInitialGroupMembershipLoaded.value) {
+                    Log.d("GroupMonitorService", "Initial load complete. Setting _isInitialGroupMembershipLoaded to true.")
+                    _isInitialGroupMembershipLoaded.value = true
+                    if (expectedId != null) {
+                        Log.d("GroupMonitorService", "Expected group ($expectedId) is now active. Resetting expected ID.")
+                        _expectedActiveGroupId.value = null // Reset after confirmation
+                    }
+                }
+
+
                 val memberIsActive = member != null && member.unjoinedTimestamp == null
+                val groupIsValidAndActive = group != null && (group.groupEndTimestamp?.let { it > System.currentTimeMillis() } ?: true)
                 val inGroup = memberIsActive && groupIsValidAndActive
+
+                Log.d("GroupMonitorService", "Evaluation: memberIsActive=$memberIsActive, groupIsValidAndActive=$groupIsValidAndActive, calculated isInActiveGroup=$inGroup (Expected ID: $expectedId)")
+
+                if (expectedId == null && memberIsActive && !groupIsValidAndActive && member?.unjoinedTimestamp == null) {
+                    Log.w("GroupMonitorService", "Active member (${member.userId}) found in expired group (${group?.groupName ?: member.groupId}). Automatically unjoining.")
+                    monitorScope.launch {
+                        val unjoinTimestamp = System.currentTimeMillis()
+                        val updatedMember = member.copy(unjoinedTimestamp = unjoinTimestamp)
+                        firestoreService.saveGroupMember(updatedMember).onSuccess {
+                            Log.d("GroupMonitorService", "Successfully marked membership ${member.id} as unjoined due to group expiration.")
+                            if (currentUserId != null) {
+                                val userProfile = firestoreService.getUserProfile(currentUserId).getOrNull()
+                                if (userProfile?.selectedActiveGroupId == member.groupId) {
+                                    firestoreService.updateUserSelectedActiveGroup(currentUserId, null).onSuccess {
+                                        Log.d("GroupMonitorService", "Cleared selected active group for user $currentUserId.")
+                                    }.onFailure { e ->
+                                        Log.e("GroupMonitorService", "Failed to clear selected active group: ${e.message}")
+                                    }
+                                }
+                            }
+                            _userMessage.value = "Your active group '${group?.groupName ?: "Unknown Group"}' has expired. You have been automatically removed. Please create or join a new group."
+                        }.onFailure { e ->
+                            Log.e("GroupMonitorService", "Failed to unjoin member from expired group: ${e.message}")
+                            _userMessage.value = "Error automatically removing you from expired group. Please try manually leaving the group."
+                        }
+                    }
+                    _isInActiveGroup.value = false
+                    stopLocationTrackingService()
+                    stopOtherMembersListeners()
+                    markerMonitorService.stopMonitoringMarkers()
+                    return@combine
+                }
 
                 _isInActiveGroup.value = inGroup
 
@@ -161,20 +230,20 @@ class GroupMonitorService(
                     ?: true
                 _isLocationSharingGloballyEnabled.value = sharingEnabled
 
-                Log.d("GroupMonitorService", "isInActiveGroup: $inGroup, Effective Interval: $interval, Sharing Enabled: $sharingEnabled (Initial Load: $isInitialLoad)")
+                Log.d("GroupMonitorService", "Final State: isInActiveGroup: $inGroup, Effective Interval: $interval, Sharing Enabled: $sharingEnabled (Initial Load: $_isInitialGroupMembershipLoaded.value)")
 
                 if (inGroup && sharingEnabled) {
                     startLocationTrackingService(interval, sharingEnabled)
                     group?.groupID?.let { groupId ->
-                        member?.userId?.let { currentUserId ->
-                            listenForOtherGroupMembers(groupId, currentUserId)
-                            markerMonitorService.startMonitoringMarkers(groupId) // NEW: Start marker monitoring
+                        member?.userId?.let { userId ->
+                            listenForOtherGroupMembers(groupId, userId)
+                            markerMonitorService.startMonitoringMarkers(groupId)
                         }
                     }
                 } else {
                     stopLocationTrackingService()
                     stopOtherMembersListeners()
-                    markerMonitorService.stopMonitoringMarkers() // NEW: Stop marker monitoring
+                    markerMonitorService.stopMonitoringMarkers()
                 }
             }.collect { /* collect to keep the flow active */ }
         }
@@ -192,7 +261,9 @@ class GroupMonitorService(
                     _activeGroup.value = null
                     _isInActiveGroup.value = false
                     stopOtherMembersListeners()
-                    _isInitialGroupMembershipLoaded.value = true // Set true even on error/no data
+                    if (_expectedActiveGroupId.value == null) {
+                        _isInitialGroupMembershipLoaded.value = true
+                    }
                     return@addSnapshotListener
                 }
 
@@ -203,7 +274,7 @@ class GroupMonitorService(
                     val activeMemberships = allMemberships.filter { it.unjoinedTimestamp == null }
 
                     var primaryActiveMember: GroupMembers? = null
-                    val currentUserProfile = runBlocking(Dispatchers.IO) { // Consider async alternative for production
+                    val currentUserProfile = runBlocking(Dispatchers.IO) {
                         firestoreService.getUserProfile(userId).getOrNull()
                     }
                     val selectedActiveGroupId = currentUserProfile?.selectedActiveGroupId
@@ -225,9 +296,8 @@ class GroupMonitorService(
                     if (primaryActiveMember != null) {
                         Log.d("GroupMonitorService", "Active group member found: ${primaryActiveMember.userId} in group ${primaryActiveMember.groupId}")
                         _activeGroupMember.value = primaryActiveMember
-                        // Pass a callback to listenForActiveGroupDetails to set the flag after its first update
                         listenForActiveGroupDetails(primaryActiveMember.groupId) {
-                            _isInitialGroupMembershipLoaded.value = true // Set true after group details are loaded
+                            // The combine block's logic with _expectedActiveGroupId will now control _isInitialGroupMembershipLoaded
                         }
                     } else {
                         Log.d("GroupMonitorService", "No active group memberships found for current user.")
@@ -235,7 +305,9 @@ class GroupMonitorService(
                         _activeGroup.value = null
                         _isInActiveGroup.value = false
                         stopOtherMembersListeners()
-                        _isInitialGroupMembershipLoaded.value = true // Set true if no active membership
+                        if (_expectedActiveGroupId.value == null) {
+                            _isInitialGroupMembershipLoaded.value = true
+                        }
                     }
                 } else {
                     Log.d("GroupMonitorService", "No group memberships found for current user.")
@@ -243,12 +315,13 @@ class GroupMonitorService(
                     _activeGroup.value = null
                     _isInActiveGroup.value = false
                     stopOtherMembersListeners()
-                    _isInitialGroupMembershipLoaded.value = true // Set true if no memberships at all
+                    if (_expectedActiveGroupId.value == null) {
+                        _isInitialGroupMembershipLoaded.value = true
+                    }
                 }
             }
     }
 
-    // Modified to accept a callback for when initial data is loaded
     private fun listenForActiveGroupDetails(groupId: String, onInitialLoadComplete: (() -> Unit)? = null) {
         activeGroupDetailsListener?.remove()
 
@@ -257,7 +330,7 @@ class GroupMonitorService(
                 if (e != null) {
                     Log.w("GroupMonitorService", "Listen for active group details failed.", e)
                     _activeGroup.value = null
-                    onInitialLoadComplete?.invoke() // Call callback on error too
+                    onInitialLoadComplete?.invoke()
                     return@addSnapshotListener
                 }
 
@@ -274,14 +347,14 @@ class GroupMonitorService(
                     Log.d("GroupMonitorService", "Active group document no longer exists in Firestore for ID: $groupId. Triggering cleanup.")
                     _activeGroup.value = null
                 }
-                onInitialLoadComplete?.invoke() // Call callback after successful load
+                onInitialLoadComplete?.invoke()
             }
     }
 
     private fun listenForOtherGroupMembers(groupId: String, currentUserId: String) {
         otherGroupMembersListener?.remove()
 
-        if (groupId.isEmpty()) { // Added check for empty groupId
+        if (groupId.isEmpty()) {
             _otherGroupMembers.value = emptyList()
             stopOtherMembersLocationsListener()
             stopOtherMembersProfilesListeners()
@@ -325,7 +398,6 @@ class GroupMonitorService(
             return
         }
 
-        // Firestore 'whereIn' clause limit is 10, so chunk the userIds
         val distinctUserIds = userIds.distinct()
         if (distinctUserIds.size > 10) {
             Log.w("GroupMonitorService", "Too many users (${distinctUserIds.size}) for single 'whereIn' query. Limiting to first 10 for locations.")
@@ -387,8 +459,6 @@ class GroupMonitorService(
     }
 
 
-    // --- RE-ADDED: startLocationTrackingService and stopLocationTrackingService ---
-    // These methods are essential for managing the Android Foreground Service.
     private fun startLocationTrackingService(interval: Long, isSharing: Boolean) {
         val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
             action = LocationTrackingService.ACTION_START_SERVICE

@@ -1,8 +1,9 @@
-// In file: app/src/main/java/com/artificialinsightsllc/teamsync/Screens/MarkerInfoDialog.kt
+// In file: app/src/main/java/com/artificialinsightsllc/teamsync/Screens/MapMarkerInfoDialog.kt
 package com.artificialinsightsllc.teamsync.Screens
 
 import android.content.Context
 import android.location.Geocoder
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,7 +21,7 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat // Corrected to AutoMirrored
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,10 +52,11 @@ import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.artificialinsightsllc.teamsync.Helpers.TimeFormatter
 import com.artificialinsightsllc.teamsync.Helpers.UnitConverter
+import com.artificialinsightsllc.teamsync.Models.MapMarker
+import com.artificialinsightsllc.teamsync.Models.MapMarkerType
 import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
 import com.artificialinsightsllc.teamsync.ui.theme.LightCream
 import com.artificialinsightsllc.teamsync.R
-import com.google.android.gms.maps.model.LatLng
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -65,67 +67,54 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MarkerInfoDialog(
-    profilePhotoUrl: String?,
-    title: String,
-    latLng: LatLng?, // New: Pass LatLng for geocoding
-    timestamp: Long,
-    speed: Float?,
-    bearing: Float?,
+fun MapMarkerInfoDialog(
+    mapMarker: MapMarker, // Now accepts a MapMarker object
     onDismissRequest: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var timeAgoString by remember { mutableStateOf("") }
-    var currentAddress by remember { mutableStateOf<String?>(null) } // State for geocoded address
+    var currentAddress by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
     // LaunchedEffect to update the timeAgoString and perform geocoding
-    LaunchedEffect(timestamp, latLng) {
-        // Update timeAgoString every second
+    LaunchedEffect(mapMarker.timestamp, mapMarker.latitude, mapMarker.longitude) {
         launch {
             while (true) {
-                timeAgoString = TimeFormatter.getRelativeTimeSpanString(timestamp).toString()
+                timeAgoString = TimeFormatter.getRelativeTimeSpanString(mapMarker.timestamp).toString()
                 delay(1000)
             }
         }
 
-        // Perform geocoding when latLng changes
-        if (latLng != null) {
-            currentAddress = geocodeLocation(context, latLng.latitude, latLng.longitude)
-        } else {
-            currentAddress = null
-        }
+        currentAddress = geocodeLocation(context, mapMarker.latitude, mapMarker.longitude)
     }
 
     LaunchedEffect(Unit) {
-        sheetState.show() // Automatically show the bottom sheet when composed
+        sheetState.show()
     }
 
     ModalBottomSheet(
         onDismissRequest = {
-            onDismissRequest() // Call the dismiss callback when the sheet is dismissed
+            onDismissRequest()
         },
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-        // Apply the background image to the container
-        containerColor = Color.Transparent, // Make container transparent to show the image
+        containerColor = Color.Transparent,
         modifier = Modifier.fillMaxWidth()
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth() // Fill the width of the modal area
-                .wrapContentHeight() // Make height wrap content
-                .background(Color.Transparent) // Ensure Box itself is transparent
+                .fillMaxWidth()
+                .wrapContentHeight()
+                .background(Color.Transparent)
         ) {
-            // Background Image for the ModalBottomSheet
             Image(
                 painter = painterResource(id = R.drawable.background1),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .matchParentSize() // Fill the size of the parent Box
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)) // Clip to match sheet corners
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             )
 
             Column(
@@ -133,77 +122,92 @@ fun MarkerInfoDialog(
                     .padding(20.dp)
                     .fillMaxWidth()
                     .wrapContentHeight()
-                    .padding(bottom = 8.dp), // Added 8.dp bottom padding
+                    .padding(bottom = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Profile Picture
-                Image(
-                    painter = rememberAsyncImagePainter(
-                        model = profilePhotoUrl,
-                        error = painterResource(id = R.drawable.default_profile_pic) // Fallback image
-                    ),
-                    contentDescription = "Profile Picture",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(150.dp)
-                        .shadow(12.dp, CircleShape, clip = false) // Added shadow modifier
-                        .clip(CircleShape)
-                        .background(Color.LightGray)
-                )
+                // Display content based on marker type
+                when (mapMarker.markerType) {
+                    MapMarkerType.PHOTO -> {
+                        mapMarker.photoUrl?.let { url ->
+                            Image(
+                                painter = rememberAsyncImagePainter(
+                                    model = url,
+                                    error = painterResource(id = R.drawable.no_image) // Fallback
+                                ),
+                                contentDescription = "Photo Marker",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(200.dp) // Larger size for photo
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .shadow(8.dp, RoundedCornerShape(8.dp), clip = false)
+                                    .background(Color.LightGray)
+                            )
+                        } ?: Image(
+                            painter = painterResource(id = R.drawable.no_image),
+                            contentDescription = "No Image Available",
+                            modifier = Modifier.size(120.dp)
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = mapMarker.message,
+                            fontSize = 16.sp,
+                            color = DarkBlue.copy(alpha = 0.9f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    MapMarkerType.CHAT -> {
+                        // Chat icon or just message, depending on preference
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
+                            contentDescription = "Chat Marker",
+                            tint = DarkBlue,
+                            modifier = Modifier.size(60.dp)
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = mapMarker.message,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = DarkBlue,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
 
-                Text(
-                    text = title,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = DarkBlue,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(16.dp))
 
-                // Address
+                // Common info for all marker types
                 currentAddress?.let {
                     Text(
                         text = it,
-                        fontSize = 16.sp,
+                        fontSize = 14.sp,
                         color = DarkBlue.copy(alpha = 0.8f),
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
                 } ?: Text(
-                    text = "Address: Looking up...", // Show a loading message for address
-                    fontSize = 14.sp,
+                    text = "Address: Looking up...",
+                    fontSize = 12.sp,
                     color = DarkBlue.copy(alpha = 0.6f),
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Updated time
                 Text(
-                    text = "Updated $timeAgoString",
-                    fontSize = 14.sp,
+                    text = "Posted $timeAgoString",
+                    fontSize = 12.sp,
                     color = DarkBlue.copy(alpha = 0.8f),
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Speed
-                speed?.let {
+                mapMarker.cameraBearing?.let {
                     Text(
-                        text = "Speed: ${String.format("%.1f", UnitConverter.metersPerSecondToMilesPerHour(it))} MPH",
-                        fontSize = 14.sp,
-                        color = DarkBlue.copy(alpha = 0.8f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Direction
-                bearing?.let {
-                    Text(
-                        text = "Direction: ${UnitConverter.getCardinalDirection(it)}",
-                        fontSize = 14.sp,
+                        text = "Camera Dir: ${UnitConverter.getCardinalDirection(it)}",
+                        fontSize = 12.sp,
                         color = DarkBlue.copy(alpha = 0.8f),
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
@@ -212,7 +216,6 @@ fun MarkerInfoDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                // Row for the two action buttons at the bottom
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -220,14 +223,12 @@ fun MarkerInfoDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Private Chat Button (Bottom Left)
                     Button(
                         onClick = {
                             Toast.makeText(context, "Private Chat functionality coming soon!", Toast.LENGTH_SHORT).show()
-                            // TODO: Navigate to private chat screen
                         },
                         modifier = Modifier
-                            .size(80.dp) // Increased button size
+                            .size(80.dp)
                             .shadow(8.dp, CircleShape, clip = false),
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = DarkBlue)
@@ -236,54 +237,50 @@ fun MarkerInfoDialog(
                             imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "Private Chat",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp) // Icon size adjusted
+                            modifier = Modifier.size(40.dp)
                         )
                     }
 
-                    // Close Button (Bottom Right)
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                sheetState.hide() // Hide the sheet with animation
+                                sheetState.hide()
                             }.invokeOnCompletion {
-                                onDismissRequest() // Call dismiss callback after animation
+                                onDismissRequest()
                             }
                         },
                         modifier = Modifier
-                            .size(80.dp) // Increased button size
+                            .size(80.dp)
                             .shadow(8.dp, CircleShape, clip = false),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000)) // Deep red/maroon
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000))
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Close",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp) // Icon size adjusted
+                            modifier = Modifier.size(40.dp)
                         )
                     }
                 }
-                // Removed the final Spacer(Modifier.height(8.dp)) here as padding is applied to column
             }
         }
     }
 }
 
-// Helper function for geocoding a location to an address string
+// Helper function for geocoding a location to an address string (copied from MarkerInfoDialog)
 private suspend fun geocodeLocation(context: Context, latitude: Double, longitude: Double): String {
-    return withContext(Dispatchers.IO) { // Perform network/IO operation on Dispatchers.IO
+    return withContext(Dispatchers.IO) {
         val geocoder = Geocoder(context, Locale.getDefault())
         try {
             val addresses = geocoder.getFromLocation(latitude, longitude, 1)
             addresses?.firstOrNull()?.getAddressLine(0) ?: "Address not found"
         } catch (e: IOException) {
-            // Log the error for debugging
-            println("Geocoding failed for $latitude, $longitude: ${e.message}")
-            "Address lookup failed" // Message for network/IO errors
+            Log.e("MapMarkerInfoDialog", "Geocoding failed for $latitude, $longitude: ${e.message}")
+            "Address lookup failed"
         } catch (e: IllegalArgumentException) {
-            // Log the error for debugging
-            println("Invalid LatLng for geocoding: $latitude, $longitude: ${e.message}")
-            "Invalid location" // Message for invalid coordinates
+            Log.e("MapMarkerInfoDialog", "Invalid LatLng for geocoding: $latitude, $longitude: ${e.message}")
+            "Invalid location"
         }
     }
 }

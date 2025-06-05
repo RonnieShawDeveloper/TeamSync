@@ -43,11 +43,10 @@ import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-// Custom color for dark blue text
-val DarkBlue = Color(0xFF00008B)
-
-// Custom color for dropdown background
-val LightCream = Color(0xFFFFFDD0)
+import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
+import com.artificialinsightsllc.teamsync.ui.theme.LightCream
+import com.artificialinsightsllc.teamsync.TeamSyncApplication
+import kotlinx.coroutines.delay
 
 class GroupCreationScreen(private val navController: NavHostController) {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -59,6 +58,7 @@ class GroupCreationScreen(private val navController: NavHostController) {
         val firestoreService = remember { FirestoreService() }
         val coroutineScope = rememberCoroutineScope()
         val auth = remember { FirebaseAuth.getInstance() }
+        val groupMonitorService = (context.applicationContext as TeamSyncApplication).groupMonitorService
 
         var groupName by remember { mutableStateOf("") }
         var groupDescription by remember { mutableStateOf("") }
@@ -72,12 +72,12 @@ class GroupCreationScreen(private val navController: NavHostController) {
             "5 Minutes (Freemium)", "1 Minute (\$5/mo)", "10 Seconds (\$10/mo)", "Real-time (\$20/mo)"
         )
         val locationUpdateIntervalValues = listOf(300000L, 60000L, 10000L, 1000L)
-        var selectedLocationUpdateIntervalIndex by remember { mutableStateOf(0) }
+        var selectedLocationUpdateIntervalIndex by remember { mutableIntStateOf(0) }
         var locationIntervalDropdownExpanded by remember { mutableStateOf(false) }
 
         val maxMemberOptions = listOf("10 (Freemium)", "20 (\$5/mo)", "50 (\$10/mo)", "100 (\$15/mo)", "Unlimited (\$30/mo)")
         val maxMemberValues = listOf(10, 20, 50, 100, Int.MAX_VALUE)
-        var selectedMaxMembersIndex by remember { mutableStateOf(0) }
+        var selectedMaxMembersIndex by remember { mutableIntStateOf(0) }
         var maxMembersDropdownExpanded by remember { mutableStateOf(false) }
 
         val durationOptions = listOf(
@@ -90,7 +90,7 @@ class GroupCreationScreen(private val navController: NavHostController) {
             3 * 24 * 60 * 60 * 1000L, 7 * 24 * 60 * 60 * 1000L, 30 * 24 * 60 * 60 * 1000L,
             90 * 24 * 60 * 60 * 1000L, 180 * 24 * 60 * 60 * 1000L, null
         )
-        var selectedDurationIndex by remember { mutableStateOf(0) }
+        var selectedDurationIndex by remember { mutableIntStateOf(0) }
         var durationDropdownExpanded by remember { mutableStateOf(false) }
 
 
@@ -99,9 +99,9 @@ class GroupCreationScreen(private val navController: NavHostController) {
         var enableAudioMessages by remember { mutableStateOf(false) }
         var enableFileSharing by remember { mutableStateOf(false) }
         var dispatchModeEnabled by remember { mutableStateOf(false) }
-        var maxGeofences by remember { mutableStateOf(0) }
+        var maxGeofences by remember { mutableIntStateOf(0) }
         var enableLocationHistory by remember { mutableStateOf(false) }
-        var locationHistoryRetentionDays by remember { mutableStateOf(0) }
+        var locationHistoryRetentionDays by remember { mutableIntStateOf(0) }
 
         val isPaidBasicOrAbove = selectedGroupType == GroupType.PAID_BASIC
 
@@ -516,6 +516,12 @@ class GroupCreationScreen(private val navController: NavHostController) {
                             }
 
                             val newGroupId = UUID.randomUUID().toString()
+
+                            // NEW: Stop GroupMonitorService listeners and tell it to expect the new group
+                            groupMonitorService.stopAllListeners()
+                            groupMonitorService.startMonitoring(newGroupId) // Tell service to expect this new group
+                            delay(250) // Allow time for services to stop/restart with new expected ID
+
                             val currentTimeMillis = System.currentTimeMillis()
 
                             val calculatedGroupEndTimestamp = when (selectedGroupType) {
@@ -531,7 +537,7 @@ class GroupCreationScreen(private val navController: NavHostController) {
 
                             val calculatedMaxMembers = when (selectedGroupType) {
                                 GroupType.FREEMIUM -> 10
-                                GroupType.PAID_BASIC -> maxMemberValues[selectedMaxMembersIndex]
+                                GroupType.PAID_BASIC -> maxMemberValues[selectedMaxMembersIndex] // Corrected from PAID_BASIC
                             }
 
                             val newGroup = Groups(
@@ -570,12 +576,12 @@ class GroupCreationScreen(private val navController: NavHostController) {
                                     joinedTimestamp = currentTimeMillis,
                                     unjoinedTimestamp = null,
                                     memberRole = MemberRole.OWNER,
-                                    sharingLocation = true, // <--- FIXED HERE
+                                    sharingLocation = true,
                                     lastKnownLocationLat = null,
                                     lastKnownLocationLon = null,
                                     lastLocationUpdateTime = null,
                                     batteryLevel = null,
-                                    online = true, // <--- FIXED HERE
+                                    online = true,
                                     personalLocationUpdateIntervalMillis = null,
                                     personalIsSharingLocationOverride = null,
                                     customMarkerIconUrl = null,
@@ -585,14 +591,22 @@ class GroupCreationScreen(private val navController: NavHostController) {
                                 val addMemberResult = firestoreService.addGroupMember(ownerMember)
 
                                 if (addMemberResult.isSuccess) {
-                                    Toast.makeText(context, "Group '${groupName}' created successfully!", Toast.LENGTH_LONG).show()
-                                    navController.popBackStack()
+                                    // Update user's selected active group after successful creation
+                                    firestoreService.updateUserSelectedActiveGroup(currentUserId, newGroupId).onSuccess {
+                                        Toast.makeText(context, "Group '${groupName}' created successfully!", Toast.LENGTH_LONG).show()
+                                    }.onFailure { e ->
+                                        Toast.makeText(context, "Group created, but failed to set as active: ${e.message}", Toast.LENGTH_LONG).show()
+                                    }
                                 } else {
                                     Toast.makeText(context, "Failed to add group owner: ${addMemberResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                                 }
                             } else {
                                 Toast.makeText(context, "Failed to create group: ${createGroupResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                             }
+
+                            // No explicit startMonitoring() call here anymore, as it's handled by the initial startMonitoring(newGroupId)
+                            // and the subsequent combine logic.
+                            navController.popBackStack() // Navigate back after everything is done
                         }
                     },
                     modifier = Modifier

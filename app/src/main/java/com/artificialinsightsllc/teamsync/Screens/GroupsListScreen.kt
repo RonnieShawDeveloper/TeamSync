@@ -51,10 +51,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.unit.IntOffset
 import java.util.UUID
 import androidx.compose.ui.draw.shadow
+import com.artificialinsightsllc.teamsync.TeamSyncApplication // Import TeamSyncApplication
 
-// Assuming DarkBlue is defined globally or imported from ui.theme.Color
-// val DarkBlue = Color(0xFF00008B)
-// val LightCream = Color(0xFFFFFDD0)
+// Assuming DarkBlue is accessible without explicit import here, based on previous conversation.
+// If not, ensure it's defined in your theme or a common object accessible without import.
 
 class GroupsListScreen(private val navController: NavHostController) {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -65,7 +65,8 @@ class GroupsListScreen(private val navController: NavHostController) {
         val auth = remember { FirebaseAuth.getInstance() }
         val coroutineScope = rememberCoroutineScope()
 
-        val groupMonitorService = remember { GroupMonitorService(context) }
+        // FIX: Retrieve GroupMonitorService from the application class
+        val groupMonitorService = (context.applicationContext as TeamSyncApplication).groupMonitorService
         val activeGroup by groupMonitorService.activeGroup.collectAsStateWithLifecycle()
         val activeGroupMember by groupMonitorService.activeGroupMember.collectAsStateWithLifecycle()
 
@@ -85,6 +86,9 @@ class GroupsListScreen(private val navController: NavHostController) {
         var showAlertDialog by remember { mutableStateOf(false) }
         var alertDialogTitle by remember { mutableStateOf("") }
         var alertDialogMessage by remember { mutableStateOf("") }
+
+        val DarkBlue = Color(0xFF0D47A1) // Define DarkBlue locally if not provided by theme directly
+        val LightCream = Color(0xFFFFFDD0) // Define LightCream locally if not provided by theme directly
 
 
         LaunchedEffect(Unit) {
@@ -262,12 +266,12 @@ class GroupsListScreen(private val navController: NavHostController) {
                                             joinedTimestamp = System.currentTimeMillis(),
                                             unjoinedTimestamp = null,
                                             memberRole = MemberRole.MEMBER,
-                                            sharingLocation = true, // Corrected property name
+                                            sharingLocation = true,
                                             lastKnownLocationLat = null,
                                             lastKnownLocationLon = null,
                                             lastLocationUpdateTime = null,
                                             batteryLevel = null,
-                                            online = true, // Corrected property name
+                                            online = true,
                                             personalLocationUpdateIntervalMillis = null,
                                             personalIsSharingLocationOverride = null,
                                             customMarkerIconUrl = null,
@@ -280,6 +284,7 @@ class GroupsListScreen(private val navController: NavHostController) {
                                                 alertDialogTitle = "Group Joined!"
                                                 alertDialogMessage = "Successfully joined group '${foundGroup.groupName}' and set it as your active group!"
                                                 showAlertDialog = true
+                                                // Refresh local group list states after joining
                                                 val updatedMemberships = firestoreService.getGroupMembershipsForUser(currentUserId).getOrNull() ?: emptyList()
                                                 myGroupMemberships = updatedMemberships
                                                 val groupIds = updatedMemberships.map { it.groupId }.distinct()
@@ -354,6 +359,7 @@ class GroupsListScreen(private val navController: NavHostController) {
                                                                         alertDialogTitle = "Group Switched"
                                                                         alertDialogMessage = "Switched active group to '${group.groupName}'."
                                                                         showAlertDialog = true
+                                                                        // Refresh local group list states after switching
                                                                         val updatedMemberships = firestoreService.getGroupMembershipsForUser(currentUserId).getOrNull() ?: emptyList()
                                                                         myGroupMemberships = updatedMemberships
                                                                         val groupIds = updatedMemberships.map { it.groupId }.distinct()
@@ -399,7 +405,7 @@ class GroupsListScreen(private val navController: NavHostController) {
                                                         groupToLeave = group
                                                         showLeaveGroupDialog = true
                                                     },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                                                     modifier = Modifier.wrapContentWidth()
                                                 ) {
                                                     Text("LEAVE", color = Color.White, fontSize = 12.sp)

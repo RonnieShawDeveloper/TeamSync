@@ -149,7 +149,6 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
         var selectedTabIndex by remember { mutableIntStateOf(0) } // 0 for Chat, 1 for Photo
         var chatMessage by remember { mutableStateOf("") }
-        // FIX: Change to val and remove 'by' to get the MutableState object itself
         val capturedImageUriState = rememberSaveable(stateSaver = UriSaver) { mutableStateOf<Uri?>(null) }
         var photoMessage by remember { mutableStateOf("") }
         var isLoading by remember { mutableStateOf(false) }
@@ -186,7 +185,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
         val cropResultLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
-                capturedImageUriState.value = UCrop.getOutput(result.data!!) // Update value via .value
+                capturedImageUriState.value = UCrop.getOutput(result.data!!)
                 Log.d("AddMapMarkerScreen", "Image cropped and captured: ${capturedImageUriState.value}")
             } else if (result.resultCode == UCrop.RESULT_ERROR) {
                 val cropError = UCrop.getError(result.data!!)
@@ -196,8 +195,6 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         }
 
         val takePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-            // capturedImageUriState.value is set by launchCamera BEFORE this callback returns.
-            // So we just check 'success' and proceed with UCrop if true.
             if (success) {
                 val destinationUri = Uri.fromFile(File(context.cacheDir, "cropped_marker_image_${UUID.randomUUID()}.jpg"))
                 val options = UCrop.Options().apply {
@@ -209,14 +206,21 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                     setStatusBarColor(Color(0xFF0D47A1).toArgb())
                     setToolbarWidgetColor(Color.White.toArgb())
                 }
-                val intent = UCrop.of(capturedImageUriState.value!!, destinationUri) // Use value
+
+                // Ensure the parent directory for the cropped image exists
+                destinationUri.path?.let { path ->
+                    File(path).parentFile?.mkdirs()
+                }
+
+                val intent = UCrop.of(capturedImageUriState.value!!, destinationUri)
                     .withAspectRatio(1f, 1f)
+                    .withMaxResultSize(512, 512)
                     .withOptions(options)
                     .getIntent(context)
                 cropResultLauncher.launch(intent)
             } else {
                 Toast.makeText(context, "Failed to capture photo.", Toast.LENGTH_SHORT).show()
-                capturedImageUriState.value = null // Clear URI if capture failed
+                capturedImageUriState.value = null
             }
         }
 
@@ -225,7 +229,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         ) { isGranted: Boolean ->
             hasCameraPermission = isGranted
             if (isGranted) {
-                launchCamera(context, takePhotoLauncher, capturedImageUriState) // Pass the state object
+                launchCamera(context, takePhotoLauncher, capturedImageUriState)
             } else {
                 Toast.makeText(context, "Camera permission is required to take photos.", Toast.LENGTH_SHORT).show()
             }
@@ -410,7 +414,10 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                         .background(Color.LightGray),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (capturedImageUriState.value != null) { // Access value via .value
+                                    if (capturedImageUriState.value != null) {
+                                        // CRASHING LINE: BitmapFactory.decodeStream(context.contentResolver.openInputStream(capturedImageUriState.value!!)).asImageBitmap()
+                                        // This line expects the file to EXIST and be readable.
+                                        // The issue is that the camera app might not have written to it yet, or failed.
                                         Image(
                                             bitmap = BitmapFactory.decodeStream(context.contentResolver.openInputStream(capturedImageUriState.value!!)).asImageBitmap(),
                                             contentDescription = "Captured Photo",
@@ -427,7 +434,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                     FloatingActionButton(
                                         onClick = {
                                             if (hasCameraPermission) {
-                                                launchCamera(context, takePhotoLauncher, capturedImageUriState) // Pass the state object
+                                                launchCamera(context, takePhotoLauncher, capturedImageUriState)
                                             } else {
                                                 if (ActivityCompat.shouldShowRequestPermissionRationale(context as Activity, Manifest.permission.CAMERA)) {
                                                     generalPermissionRationaleText = "Camera access is needed to take a photo for your map marker. Please grant this permission."
@@ -515,7 +522,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                                 }
 
                                             } else { // Photo Marker
-                                                if (capturedImageUriState.value == null) { // Access value via .value
+                                                if (capturedImageUriState.value == null) {
                                                     Toast.makeText(context, "Please take a photo first.", Toast.LENGTH_SHORT).show()
                                                     isLoading = false
                                                     return@launch
@@ -528,7 +535,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
                                                 // Upload photo to Firebase Storage
                                                 val photoRef = firebaseStorage.reference.child("map_markers/${groupId}/${newMarkerId}.jpg")
-                                                val uploadResult = photoRef.putFile(capturedImageUriState.value!!).await() // Access value via .value
+                                                val uploadResult = photoRef.putFile(capturedImageUriState.value!!).await()
                                                 val photoUrl = uploadResult.storage.downloadUrl.await().toString()
 
                                                 markerToSave = MapMarker(
@@ -637,13 +644,16 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
     private fun launchCamera(
         context: Context,
         takePhotoLauncher: ActivityResultLauncher<Uri>,
-        outUriState: MutableState<Uri?> // FIX: Accept MutableState<Uri?>
+        outUriState: MutableState<Uri?>
     ) {
-        // FIX: Store the file in context.filesDir for persistence across process death
         val photoFile = File(context.filesDir, "temp_marker_photo_${UUID.randomUUID()}.jpg")
+
+        // CRITICAL FIX: Ensure the parent directory exists before getting the URI for writing
+        // This is the specific line that should resolve the ENOENT during camera launch attempt
+        photoFile.parentFile?.mkdirs() // Ensure parent directories are created if they don't exist
+
         val photoUri = FileProvider.getUriForFile(context, "${context.packageName}.provider", photoFile)
 
-        // FIX: Update the value of the MutableState using .value
         outUriState.value = photoUri
         takePhotoLauncher.launch(photoUri)
     }

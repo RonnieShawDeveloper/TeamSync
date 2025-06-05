@@ -293,8 +293,8 @@ class MainScreen(private val navController: NavHostController) {
                 }
 
                 if (allPermissionsGranted && hasNotificationPermission) {
-                    Log.d("MainScreen", "All required permissions granted, including notifications. Delaying service signal.")
-                    delay(500) // Keep this small delay here for initial permission grant
+                    Log.d("MainScreen", "All required permissions granted, including notifications. Signaling GroupMonitorService.")
+                    // No delay needed here anymore as the main logic in GroupMonitorService handles it
                     groupMonitorService.setUiPermissionsGranted(true)
                 } else {
                     Log.w("MainScreen", "Not all required permissions granted. Some features may be disabled.")
@@ -320,7 +320,7 @@ class MainScreen(private val navController: NavHostController) {
 
         // --- LaunchedEffects for initial setup and state observation ---
 
-        // 1. Initial Data Loading and Permission Check
+        // 1. Initial Data Loading and Permission Check (Runs once on composition)
         LaunchedEffect(Unit) {
             val auth = FirebaseAuth.getInstance()
             val firestore = FirebaseFirestore.getInstance()
@@ -358,6 +358,7 @@ class MainScreen(private val navController: NavHostController) {
             allPermissionsGranted = currentAllPermissionsGranted
             hasNotificationPermission = currentHasNotificationPermission
 
+            // Only show rationale dialog if permissions are genuinely missing
             if (!(currentAllPermissionsGranted && currentHasNotificationPermission)) {
                 showPermissionRationaleDialog = true
             }
@@ -365,14 +366,14 @@ class MainScreen(private val navController: NavHostController) {
             // Immediately inform GroupMonitorService about current permission status and start its core monitoring.
             // Pass the user's currently selected active group ID to tell GroupMonitorService what to expect.
             val initialSelectedGroupId = currentUserModel?.selectedActiveGroupId
-            groupMonitorService.startMonitoring(initialSelectedGroupId) // Pass expected ID here
+            groupMonitorService.startMonitoring(initialSelectedGroupId)
             groupMonitorService.setUiPermissionsGranted(currentAllPermissionsGranted && currentHasNotificationPermission)
         }
 
-        // 2. Manage LocationTrackingService (Foreground Service) based on combined states
+        // 2. Manage LocationTrackingService (Foreground Service) status via GroupMonitorService
         // This LaunchedEffect itself does NOT start/stop the service directly anymore.
-        // It merely ensures the relevant states (_isInGroup, allPermissionsGranted, etc.) are observed.
-        // The actual start/stop happens *within* GroupMonitorService's combine block.
+        // It merely ensures the relevant states (_isInGroup, allPermissionsGranted, etc.) are observed
+        // and that GroupMonitorService has the latest state for its internal decisions.
         LaunchedEffect(
             isInGroup,
             allPermissionsGranted,
@@ -383,16 +384,21 @@ class MainScreen(private val navController: NavHostController) {
             val currentUser = FirebaseAuth.getInstance().currentUser
             val isUserLoggedIn = currentUser != null
 
+            // Calculate the combined condition for starting services, which GroupMonitorService already uses.
+            // This LaunchedEffect exists mainly to ensure GroupMonitorService reacts to changes in these states.
             val canLogicStartForegroundService = isUserLoggedIn && isInGroup && isLocationSharingGloballyEnabled &&
                     allPermissionsGranted &&
                     (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || hasNotificationPermission)
 
+            // Log for debugging visibility, no direct service calls here.
             if (canLogicStartForegroundService) {
-                Log.d("MainScreen", "Conditions met for GroupMonitorService to potentially start FGS. Notifying GroupMonitorService states.")
+                Log.d("MainScreen", "Conditions met for GroupMonitorService to potentially start FGS.")
             } else {
-                Log.d("MainScreen", "Conditions NOT met for GroupMonitorService to start FGS. Notifying GroupMonitorService states.")
+                Log.d("MainScreen", "Conditions NOT met for GroupMonitorService to start FGS.")
             }
-            // No direct service calls here. GroupMonitorService handles it based on its own combine flow.
+            // The actual service start/stop logic is now entirely within GroupMonitorService's combine flow,
+            // reacting to the states it receives from here via setUiPermissionsGranted.
+            // No direct service calls from here.
         }
 
 
@@ -400,7 +406,7 @@ class MainScreen(private val navController: NavHostController) {
         DisposableEffect(lifecycleOwner, fusedLocationClient, allPermissionsGranted, effectiveLocationUpdateInterval) {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_START) {
-                    if (allPermissionsGranted) {
+                    if (allPermissionsGranted) { // Only start local GPS if all permissions are good
                         startLocationUpdates(fusedLocationClient, locationCallback, effectiveLocationUpdateInterval)
                     }
                 } else if (event == Lifecycle.Event.ON_STOP) {
@@ -412,18 +418,13 @@ class MainScreen(private val navController: NavHostController) {
                 lifecycleOwner.lifecycle.removeObserver(observer)
                 fusedLocationClient.removeLocationUpdates(locationCallback)
                 Log.d("MainScreen", "Stopped local GPS location updates on dispose.")
-                stopAppTrackingService() // Safety stop
+                stopAppTrackingService() // Safety stop for the FGS
             }
         }
 
-        // 4. Trigger Rationale Dialog if permissions are missing
-        LaunchedEffect(isInGroup, allPermissionsGranted, hasNotificationPermission) {
-            if (isInGroup && (!allPermissionsGranted || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission))) {
-                showPermissionRationaleDialog = true
-            } else {
-                showPermissionRationaleDialog = false
-            }
-        }
+        // 4. Removed the LaunchedEffect that caused the flicker
+        // The display logic for showPermissionRationaleDialog is now only in LaunchedEffect(Unit)
+        // and the multiplePermissionsLauncher callback.
 
         // 5. Center Map on User Location
         LaunchedEffect(userLocation, mapLockedToUserLocation) {

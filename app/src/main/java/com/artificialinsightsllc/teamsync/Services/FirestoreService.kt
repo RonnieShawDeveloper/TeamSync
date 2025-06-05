@@ -1,6 +1,7 @@
 // In file: app/src/main/java/com/artificialinsightsllc/teamsync/Services/FirestoreService.kt
 package com.artificialinsightsllc.teamsync.Services
 
+import android.util.Log
 import com.artificialinsightsllc.teamsync.Models.Groups
 import com.artificialinsightsllc.teamsync.Models.GroupMembers
 import com.artificialinsightsllc.teamsync.Models.Locations
@@ -61,6 +62,7 @@ class FirestoreService(
     }
 
     suspend fun addGroupMember(member: GroupMembers): Result<String> {
+        Log.d("FirestoreService", "Adding group member: $member")
         return try {
             val docRef = groupMembersCollection.add(member).await()
             Result.success(docRef.id)
@@ -70,6 +72,7 @@ class FirestoreService(
     }
 
     suspend fun saveGroupMember(member: GroupMembers): Result<Void?> {
+        Log.d("FirestoreService", "Saving group member: $member")
         return try {
             groupMembersCollection.document(member.id).set(member).await()
             Result.success(null)

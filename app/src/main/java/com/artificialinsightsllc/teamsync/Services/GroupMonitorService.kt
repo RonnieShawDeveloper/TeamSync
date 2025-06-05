@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.delay // Added import for delay
+import kotlinx.coroutines.delay
 
 class GroupMonitorService(
     private val context: Context,
@@ -64,7 +64,8 @@ class GroupMonitorService(
     val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
 
     private val _isInitialGroupMembershipLoaded = MutableStateFlow(false)
-    private var _currentlyExpectingGroupTransition: String? = null
+    // Renamed and made observable via StateFlow for combine
+    private val _expectedGroupIdForGracePeriod = MutableStateFlow<String?>(null)
 
 
     private var currentUserGroupMembershipsListener: ListenerRegistration? = null
@@ -89,6 +90,22 @@ class GroupMonitorService(
         if (_uiPermissionsGranted.value != granted) {
             _uiPermissionsGranted.value = granted
             Log.d("GroupMonitorService", "UI Permissions Granted status set to: $granted")
+        }
+    }
+
+    /**
+     * Sets an expected group ID. This is used to create a grace period during group transitions
+     * (e.g., after creating a new group) to prevent premature auto-unjoins due to transient Firestore states.
+     * @param groupId The ID of the group that is expected to become active, or null to clear expectation.
+     */
+    fun setExpectedGroupForGracePeriod(groupId: String?) {
+        _expectedGroupIdForGracePeriod.value = groupId
+        if (groupId != null) {
+            Log.d("GroupMonitorService", "Set expected group ID for grace period: $groupId")
+            // Optionally, reset initial load status if we are starting a new group transition
+            _isInitialGroupMembershipLoaded.value = false
+        } else {
+            Log.d("GroupMonitorService", "Cleared expected group ID for grace period.")
         }
     }
 
@@ -138,18 +155,18 @@ class GroupMonitorService(
         markerMonitorService.stopMonitoringMarkers()
         Log.d("GroupMonitorService", "Stopped all Firestore listeners.")
         _isInitialGroupMembershipLoaded.value = false
-        _currentlyExpectingGroupTransition = null
+        setExpectedGroupForGracePeriod(null) // Clear any pending grace period expectation
     }
 
     /**
      * Starts monitoring group data based on authentication status and UI permissions.
      * This method will now be called from MainScreen once permissions are handled.
-     * @param expectedGroupId If provided, the service will wait for this specific group to become active
-     * before considering initial data loaded.
+     * @param expectedGroupId If provided, the service will explicitly expect this group to become active.
      */
     fun startMonitoring(expectedGroupId: String? = null) {
-        _currentlyExpectingGroupTransition = expectedGroupId
-        Log.d("GroupMonitorService", "startMonitoring called. Expecting group transition: $expectedGroupId")
+        // Set the internal StateFlow to indicate we are expecting a group transition.
+        // This will be observed by the combine block to prevent premature unjoins.
+        setExpectedGroupForGracePeriod(expectedGroupId)
 
         // Only add auth state listener once.
         if (currentUserGroupMembershipsListener == null) {
@@ -165,7 +182,8 @@ class GroupMonitorService(
                         _activeGroupMember.value = null
                         _activeGroup.value = null
                         _isInActiveGroup.value = false
-                        stopLocationTrackingService()
+                        // On logout, explicitly send stop signal to service (it should already be stopped if not in group)
+                        sendLocationTrackingUpdateIntent(0L, false, true) // Action STOP_SERVICE
                         _userMessage.value = "You have been logged out."
                     }
                 }
@@ -179,15 +197,15 @@ class GroupMonitorService(
                 _activeGroup,
                 _isLocationSharingGloballyEnabled,
                 _isInitialGroupMembershipLoaded,
-                _uiPermissionsGranted
+                _uiPermissionsGranted,
+                _expectedGroupIdForGracePeriod // NEW: Added as a dependency for combine to react to it
             ) { args: Array<Any?> ->
                 val member = args[0] as GroupMembers?
                 val group = args[1] as Groups?
                 val isSharingGloballyEnabled = args[2] as Boolean
                 val isInitialLoad = args[3] as Boolean
                 val uiPermissionsGranted = args[4] as Boolean
-
-                val expectedId = _currentlyExpectingGroupTransition // Get expected ID from internal state
+                val expectedIdForGracePeriod = args[5] as String? // NEW: get value from combine args
 
                 val currentUserId = auth.currentUser?.uid
 
@@ -195,14 +213,18 @@ class GroupMonitorService(
                 val groupIsValidAndActive = group != null && (group.groupEndTimestamp?.let { it > System.currentTimeMillis() } ?: true)
                 val inGroup = memberIsActive && groupIsValidAndActive
 
-                // NEW: Logic to determine if we are in a "grace period" for group transition
-                val inGroupTransitionGracePeriod = expectedId != null && (member?.groupId != expectedId || group?.groupID != expectedId || member.unjoinedTimestamp != null)
+                // NEW: Logic to determine if we are in a "grace period" for group transition.
+                // This is true if we are expecting a specific group AND the member for that group
+                // has arrived, but the group details themselves (or correct active status) are still missing.
+                val inGroupTransitionGracePeriod = expectedIdForGracePeriod != null &&
+                        member?.groupId == expectedIdForGracePeriod &&
+                        !groupIsValidAndActive // Group data is not yet valid/active for the expected member
 
-                Log.d("GroupMonitorService", "Combine Evaluation: member=${member?.groupId}, group=${group?.groupID}, ExpectedId=$expectedId, InGracePeriod=$inGroupTransitionGracePeriod")
+                Log.d("GroupMonitorService", "Combine Evaluation: member=${member?.groupId}, group=${group?.groupID}, ExpectedId=$expectedIdForGracePeriod, InGracePeriod=$inGroupTransitionGracePeriod, UI Permissions Granted: $uiPermissionsGranted")
 
 
                 // Handle automatic unjoining from expired groups
-                // NEW: Prevent auto-unjoin if we are currently in a group transition grace period
+                // IMPORTANT: Prevent auto-unjoin if we are currently in a group transition grace period.
                 if (!inGroupTransitionGracePeriod && memberIsActive && !groupIsValidAndActive && member?.unjoinedTimestamp == null) {
                     Log.w("GroupMonitorService", "Active member (${member.userId}) found in expired group (${group?.groupName ?: member.groupId}). Automatically unjoining.")
                     monitorScope.launch {
@@ -227,7 +249,8 @@ class GroupMonitorService(
                         }
                     }
                     _isInActiveGroup.value = false
-                    stopLocationTrackingService()
+                    // When auto-unjoin, tell service to stop active tracking, but keep it foreground
+                    sendLocationTrackingUpdateIntent(0L, false, false) // Action UPDATE_TRACKING_STATE
                     stopOtherMembersListeners()
                     markerMonitorService.stopMonitoringMarkers()
                     return@combine
@@ -236,33 +259,32 @@ class GroupMonitorService(
                 // Decide on isInActiveGroup for UI
                 _isInActiveGroup.value = inGroup
 
+                val interval = member?.personalLocationUpdateIntervalMillis
+                    ?: group?.locationUpdateIntervalMillis
+                    ?: 300000L
+                _effectiveLocationUpdateInterval.value = interval
 
-                // Determine if services *can* be started based on app logic and permissions
-                val canStartServices = inGroup && isSharingGloballyEnabled && uiPermissionsGranted
+                val sharingEnabled = member?.personalIsSharingLocationOverride
+                    ?: member?.sharingLocation
+                    ?: true
+                _isLocationSharingGloballyEnabled.value = sharingEnabled
 
-                Log.d("GroupMonitorService", "Final Service Decision: Can Start Services: $canStartServices (isInGroup: $inGroup, Sharing: $isSharingGloballyEnabled, UI Perms: $uiPermissionsGranted, Expected ID: $expectedId, InGracePeriod=$inGroupTransitionGracePeriod)")
+                // The decision to actually start/stop active tracking
+                val shouldStartActiveTracking = inGroup && sharingEnabled && uiPermissionsGranted
 
-                // IMPORTANT: Only start services if we are definitively in a state to do so.
-                // If we are in a grace period (expecting a group to become active) but conditions
-                // for starting services aren't met *yet*, do NOT stop services prematurely.
-                if (canStartServices) {
-                    // Reset grace period flag once the expected group is definitively active
-                    if (expectedId != null && member?.groupId == expectedId && group?.groupID == expectedId && member.unjoinedTimestamp == null) {
-                        _currentlyExpectingGroupTransition = null
-                        Log.d("GroupMonitorService", "Expected group ($expectedId) fully loaded and active. Grace period ended.")
-                    }
+                // Reset grace period flag once the expected group is definitively active
+                if (expectedIdForGracePeriod != null && member?.groupId == expectedIdForGracePeriod && group?.groupID == expectedIdForGracePeriod && member.unjoinedTimestamp == null) {
+                    setExpectedGroupForGracePeriod(null) // Clear the grace period expectation
+                    Log.d("GroupMonitorService", "Expected group ($expectedIdForGracePeriod) fully loaded and active. Grace period ended.")
+                }
 
-                    // Get the interval here, within the combine lambda's scope
-                    val interval = member?.personalLocationUpdateIntervalMillis
-                        ?: group?.locationUpdateIntervalMillis
-                        ?: 300000L
+                // Send a signal to LocationTrackingService to update its tracking state
+                // This ensures the service is either actively tracking or just foreground (idle)
+                Log.d("GroupMonitorService", "Sending tracking update intent. Should track: $shouldStartActiveTracking, Interval: $interval")
+                sendLocationTrackingUpdateIntent(interval, shouldStartActiveTracking, false)
 
-                    // *** CRITICAL DELAY ADDED HERE before starting foreground service ***
-                    // This delay is AFTER all logical conditions (inGroup, sharingEnabled, uiPermissionsGranted)
-                    // and data consistency checks (isGroupDataFullyLoadedAndMatchesExpected) pass.
-                    delay(1000) // Changed delay to 1000ms
-
-                    startLocationTrackingService(interval, isSharingGloballyEnabled)
+                // Also manage other listeners (other members, map markers) based on whether we are in a group AND have UI permissions
+                if (inGroup && uiPermissionsGranted) {
                     group?.groupID?.let { groupId ->
                         member?.userId?.let { userId ->
                             listenForOtherGroupMembers(groupId, userId)
@@ -270,23 +292,14 @@ class GroupMonitorService(
                         }
                     }
                 } else {
-                    // Only stop services if we are NOT in a group transition grace period.
-                    // This prevents flickering/crashing during the brief state changes of group creation.
-                    if (!inGroupTransitionGracePeriod) {
-                        Log.d("GroupMonitorService", "Stopping services: Not in group, or sharing disabled, or permissions not granted, AND NOT in a grace period.")
-                        stopLocationTrackingService()
-                        stopOtherMembersListeners()
-                        markerMonitorService.stopMonitoringMarkers()
-                    } else {
-                        Log.d("GroupMonitorService", "Services not starting, but staying active/on hold due to active group transition grace period for $expectedId.")
-                        // Keep services potentially running, but not actively tracking if conditions aren't met yet
-                        // (e.g., location sharing disabled within the new group, but we are still waiting for it to be fully active).
-                        // More importantly, prevent stopping during the critical transient period.
-                    }
+                    stopOtherMembersListeners()
+                    markerMonitorService.stopMonitoringMarkers()
                 }
+
             }.collect { /* collect to keep the flow active */ }
         }
     }
+
 
     /**
      * Listens for the current user's group memberships from Firestore.
@@ -308,14 +321,13 @@ class GroupMonitorService(
                     return@addSnapshotListener
                 }
 
-                if (snapshots != null && !snapshots.isEmpty()) { // Ensure snapshots is not empty before mapping
+                if (snapshots != null && !snapshots.isEmpty()) {
                     val allMemberships = snapshots.documents.mapNotNull { doc ->
                         doc.toObject(GroupMembers::class.java)?.copy(id = doc.id)
                     }
                     val activeMemberships = allMemberships.filter { it.unjoinedTimestamp == null }
 
                     var primaryActiveMember: GroupMembers? = null
-                    // Fetch user profile to get selectedActiveGroupId
                     val currentUserProfile = runBlocking(Dispatchers.IO) { // Consider making this async
                         firestoreService.getUserProfile(userId).getOrNull()
                     }
@@ -326,13 +338,11 @@ class GroupMonitorService(
                         if (primaryActiveMember == null) {
                             Log.d("GroupMonitorService", "Selected active group ($selectedActiveGroupId) not found or not active. Falling back to most recent active.")
                             monitorScope.launch {
-                                // Clear selected active group if it's no longer valid/active
                                 firestoreService.updateUserSelectedActiveGroup(userId, null)
                             }
                         }
                     }
 
-                    // If no explicit active group, try to find the most recent active one
                     if (primaryActiveMember == null) {
                         primaryActiveMember = activeMemberships.maxByOrNull { it.joinedTimestamp }
                     }
@@ -517,33 +527,24 @@ class GroupMonitorService(
     }
 
     /**
-     * Starts the LocationTrackingService (Foreground Service).
-     * @param interval The desired location update interval.
-     * @param isSharing Boolean indicating if location sharing is enabled.
+     * Sends an Intent to LocationTrackingService to update its tracking state or to stop completely.
+     * @param interval The location update interval to use if tracking is enabled.
+     * @param isSharing True if location tracking should be active, false if it should be idle.
+     * @param stopServiceCompletely If true, sends ACTION_STOP_SERVICE; otherwise, sends ACTION_UPDATE_TRACKING_STATE.
      */
-    private fun startLocationTrackingService(interval: Long, isSharing: Boolean) {
-        val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
-            action = LocationTrackingService.ACTION_START_SERVICE
+    private fun sendLocationTrackingUpdateIntent(interval: Long, isSharing: Boolean, stopServiceCompletely: Boolean) {
+        val intent = Intent(context, LocationTrackingService::class.java).apply {
+            action = if (stopServiceCompletely) LocationTrackingService.ACTION_STOP_SERVICE else LocationTrackingService.ACTION_UPDATE_TRACKING_STATE
             putExtra(LocationTrackingService.EXTRA_LOCATION_INTERVAL, interval)
             putExtra(LocationTrackingService.EXTRA_IS_SHARING_LOCATION, isSharing)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
+        if (stopServiceCompletely) {
+            context.stopService(intent)
+            Log.d("GroupMonitorService", "Explicitly sending ACTION_STOP_SERVICE to LocationTrackingService.")
         } else {
-            context.startService(serviceIntent)
+            context.startService(intent)
+            Log.d("GroupMonitorService", "Sending ACTION_UPDATE_TRACKING_STATE to LocationTrackingService: isSharing=$isSharing, interval=$interval.")
         }
-        Log.d("GroupMonitorService", "Requested LocationTrackingService START.")
-    }
-
-    /**
-     * Stops the LocationTrackingService (Foreground Service).
-     */
-    private fun stopLocationTrackingService() {
-        val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
-            action = LocationTrackingService.ACTION_STOP_SERVICE
-        }
-        context.stopService(serviceIntent)
-        Log.d("GroupMonitorService", "Requested LocationTrackingService STOP.")
     }
 
     /**

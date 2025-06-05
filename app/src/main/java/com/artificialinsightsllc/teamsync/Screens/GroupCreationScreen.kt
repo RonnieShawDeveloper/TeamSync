@@ -46,7 +46,6 @@ import java.util.UUID
 import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
 import com.artificialinsightsllc.teamsync.ui.theme.LightCream
 import com.artificialinsightsllc.teamsync.TeamSyncApplication
-// Removed kotlinx.coroutines.delay import as it's no longer used for service coordination
 
 class GroupCreationScreen(private val navController: NavHostController) {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -58,7 +57,6 @@ class GroupCreationScreen(private val navController: NavHostController) {
         val firestoreService = remember { FirestoreService() }
         val coroutineScope = rememberCoroutineScope()
         val auth = remember { FirebaseAuth.getInstance() }
-        // The groupMonitorService instance is retrieved but its startup logic is now passive
         val groupMonitorService = (context.applicationContext as TeamSyncApplication).groupMonitorService
 
         var groupName by remember { mutableStateOf("") }
@@ -518,9 +516,6 @@ class GroupCreationScreen(private val navController: NavHostController) {
 
                             val newGroupId = UUID.randomUUID().toString()
 
-                            // Removed stopAllListeners and startMonitoring from here.
-                            // The GroupMonitorService will be correctly updated by MainScreen when it resumes.
-
                             val currentTimeMillis = System.currentTimeMillis()
 
                             val calculatedGroupEndTimestamp = when (selectedGroupType) {
@@ -569,11 +564,11 @@ class GroupCreationScreen(private val navController: NavHostController) {
 
                             if (createGroupResult.isSuccess) {
                                 val ownerMember = GroupMembers(
-                                    id = "",
+                                    id = "", // Firestore will generate
                                     groupId = newGroupId,
                                     userId = currentUserId,
                                     joinedTimestamp = currentTimeMillis,
-                                    unjoinedTimestamp = null,
+                                    unjoinedTimestamp = null, // Ensure this is null on creation
                                     memberRole = MemberRole.OWNER,
                                     sharingLocation = true,
                                     lastKnownLocationLat = null,
@@ -591,10 +586,16 @@ class GroupCreationScreen(private val navController: NavHostController) {
 
                                 if (addMemberResult.isSuccess) {
                                     // Update user's selected active group after successful creation
-                                    firestoreService.updateUserSelectedActiveGroup(currentUserId, newGroupId).onSuccess {
+                                    val updateUserResult = firestoreService.updateUserSelectedActiveGroup(currentUserId, newGroupId)
+
+                                    if (updateUserResult.isSuccess) {
+                                        // CRITICAL: Signal GroupMonitorService to expect this new group before navigating
+                                        groupMonitorService.setExpectedGroupForGracePeriod(newGroupId)
+
                                         Toast.makeText(context, "Group '${groupName}' created successfully!", Toast.LENGTH_LONG).show()
-                                    }.onFailure { e ->
-                                        Toast.makeText(context, "Group created, but failed to set as active: ${e.message}", Toast.LENGTH_LONG).show()
+                                        navController.popBackStack() // Navigate back after everything is done and signaled
+                                    } else {
+                                        Toast.makeText(context, "Group created, but failed to set as active: ${updateUserResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                                     }
                                 } else {
                                     Toast.makeText(context, "Failed to add group owner: ${addMemberResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
@@ -602,8 +603,6 @@ class GroupCreationScreen(private val navController: NavHostController) {
                             } else {
                                 Toast.makeText(context, "Failed to create group: ${createGroupResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                             }
-
-                            navController.popBackStack() // Navigate back after everything is done
                         }
                     },
                     modifier = Modifier

@@ -46,7 +46,7 @@ import java.util.UUID
 import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
 import com.artificialinsightsllc.teamsync.ui.theme.LightCream
 import com.artificialinsightsllc.teamsync.TeamSyncApplication
-import kotlinx.coroutines.delay
+// Removed kotlinx.coroutines.delay import as it's no longer used for service coordination
 
 class GroupCreationScreen(private val navController: NavHostController) {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -58,6 +58,7 @@ class GroupCreationScreen(private val navController: NavHostController) {
         val firestoreService = remember { FirestoreService() }
         val coroutineScope = rememberCoroutineScope()
         val auth = remember { FirebaseAuth.getInstance() }
+        // The groupMonitorService instance is retrieved but its startup logic is now passive
         val groupMonitorService = (context.applicationContext as TeamSyncApplication).groupMonitorService
 
         var groupName by remember { mutableStateOf("") }
@@ -517,10 +518,8 @@ class GroupCreationScreen(private val navController: NavHostController) {
 
                             val newGroupId = UUID.randomUUID().toString()
 
-                            // NEW: Stop GroupMonitorService listeners and tell it to expect the new group
-                            groupMonitorService.stopAllListeners()
-                            groupMonitorService.startMonitoring(newGroupId) // Tell service to expect this new group
-                            delay(250) // Allow time for services to stop/restart with new expected ID
+                            // Removed stopAllListeners and startMonitoring from here.
+                            // The GroupMonitorService will be correctly updated by MainScreen when it resumes.
 
                             val currentTimeMillis = System.currentTimeMillis()
 
@@ -537,7 +536,7 @@ class GroupCreationScreen(private val navController: NavHostController) {
 
                             val calculatedMaxMembers = when (selectedGroupType) {
                                 GroupType.FREEMIUM -> 10
-                                GroupType.PAID_BASIC -> maxMemberValues[selectedMaxMembersIndex] // Corrected from PAID_BASIC
+                                GroupType.PAID_BASIC -> maxMemberValues[selectedMaxMembersIndex]
                             }
 
                             val newGroup = Groups(
@@ -604,8 +603,6 @@ class GroupCreationScreen(private val navController: NavHostController) {
                                 Toast.makeText(context, "Failed to create group: ${createGroupResult.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                             }
 
-                            // No explicit startMonitoring() call here anymore, as it's handled by the initial startMonitoring(newGroupId)
-                            // and the subsequent combine logic.
                             navController.popBackStack() // Navigate back after everything is done
                         }
                     },

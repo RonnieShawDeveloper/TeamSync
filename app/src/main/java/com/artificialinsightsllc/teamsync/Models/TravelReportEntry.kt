@@ -39,6 +39,10 @@ sealed class TravelReportEntry {
      * @property endLongitude The longitude of the end point of the travel segment.
      * @property distanceMiles The total distance traveled during this segment in miles.
      * @property averageMph The average speed during this segment in miles per hour.
+     * @property startCity The city where the travel segment started (nullable if not found).
+     * @property startState The state where the travel segment started (nullable if not found).
+     * @property endCity The city where the travel segment ended (nullable if not found).
+     * @property endState The state where the travel segment ended (nullable if not found).
      */
     data class Travel(
         val startTimeMillis: Long,
@@ -49,7 +53,11 @@ sealed class TravelReportEntry {
         val endLatitude: Double,
         val endLongitude: Double,
         val distanceMiles: Double,
-        val averageMph: Double
+        val averageMph: Double,
+        val startCity: String? = null, // NEW: City at start of travel
+        val startState: String? = null, // NEW: State at start of travel
+        val endCity: String? = null, // NEW: City at end of travel
+        val endState: String? = null // NEW: State at end of travel
     ) : TravelReportEntry()
 
     /**

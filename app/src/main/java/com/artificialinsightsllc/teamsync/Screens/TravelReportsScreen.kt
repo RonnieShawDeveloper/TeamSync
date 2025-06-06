@@ -8,9 +8,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,11 +37,12 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.artificialinsightsllc.teamsync.Helpers.TravelReportGenerator
 import com.artificialinsightsllc.teamsync.Helpers.TimeFormatter
-import com.artificialinsightsllc.teamsync.Helpers.UnitConverter
 import com.artificialinsightsllc.teamsync.Models.TravelReportEntry
 import com.artificialinsightsllc.teamsync.Services.FirestoreService
 import com.artificialinsightsllc.teamsync.R
 import androidx.compose.foundation.layout.systemBarsPadding
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
 import com.artificialinsightsllc.teamsync.ui.theme.LightCream
@@ -48,14 +54,17 @@ class TravelReportScreen(private val navController: NavHostController, private v
     fun Content() {
         val context = LocalContext.current
         val firestoreService = remember { FirestoreService() }
+        val coroutineScope = rememberCoroutineScope()
         val DarkBlue = Color(0xFF0D47A1)
         val LightCream = Color(0xFFFFFDD0)
 
         var isLoading by remember { mutableStateOf(true) }
         var reportEntries by remember { mutableStateOf<List<TravelReportEntry>>(emptyList()) }
         var errorMessage by remember { mutableStateOf<String?>(null) }
+        var showScreen by remember { mutableStateOf(false) } // For animation visibility
 
         LaunchedEffect(userId) {
+            showScreen = true // Trigger slide-in animation
             isLoading = true
             errorMessage = null
             reportEntries = emptyList()
@@ -74,7 +83,13 @@ class TravelReportScreen(private val navController: NavHostController, private v
                     } else {
                         Log.d("TravelReportScreen", "Fetched ${rawLocations.size} raw locations. Generating report...")
                         val generatedReport = TravelReportGenerator.generateReport(rawLocations, context)
-                        reportEntries = generatedReport
+                        reportEntries = generatedReport.sortedByDescending {
+                            when (it) {
+                                is TravelReportEntry.Stationary -> it.startTimeMillis
+                                is TravelReportEntry.Travel -> it.startTimeMillis
+                                is TravelReportEntry.DataGap -> it.startTimeMillis
+                            }
+                        }
                         if (generatedReport.isEmpty()) {
                             errorMessage = "No significant travel or stationary events found in the last 24 hours."
                         }
@@ -111,14 +126,33 @@ class TravelReportScreen(private val navController: NavHostController, private v
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Top
             ) {
-                Text(
-                    text = "Travel Report",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = DarkBlue,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    IconButton(onClick = {
+                        coroutineScope.launch {
+                            showScreen = false // Trigger slide-out animation
+                            delay(550) // Wait for animation to complete
+                            navController.popBackStack()
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = DarkBlue)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Travel Report",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = DarkBlue,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(48.dp)) // To balance the back button
+                }
+
+                Spacer(Modifier.height(16.dp))
 
                 if (isLoading) {
                     Column(
@@ -228,10 +262,23 @@ class TravelReportScreen(private val navController: NavHostController, private v
                                                 color = DarkBlue,
                                                 fontWeight = FontWeight.Medium
                                             )
+                                            if (entry.startCity != null || entry.startState != null) {
+                                                Text(
+                                                    text = "Start: ${entry.startCity?.plus(", ") ?: ""}${entry.startState ?: ""}",
+                                                    color = DarkBlue.copy(alpha = 0.8f),
+                                                    fontSize = 14.sp
+                                                )
+                                            }
+                                            if (entry.endCity != null || entry.endState != null) {
+                                                Text(
+                                                    text = "End: ${entry.endCity?.plus(", ") ?: ""}${entry.endState ?: ""}",
+                                                    color = DarkBlue.copy(alpha = 0.8f),
+                                                    fontSize = 14.sp
+                                                )
+                                            }
                                         }
                                     }
                                 }
-                                // NEW: DataGap entry display
                                 is TravelReportEntry.DataGap -> {
                                     Card(
                                         modifier = Modifier.fillMaxWidth(0.95f),

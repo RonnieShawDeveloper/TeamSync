@@ -20,5 +20,6 @@ data class UserModel(
     // FIXED: Renamed to match Firestore's expected field name (without 'is' prefix)
     val verified: Boolean = false, // Renamed from isVerified
     val profileComplete: Boolean = false,
-    val selectedActiveGroupId: String? = null
+    val selectedActiveGroupId: String? = null,
+    val mainInstructionsSeen: Boolean? = false
 )

@@ -14,6 +14,9 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -43,6 +46,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Close // Import Close icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FloatingActionButton
@@ -63,6 +67,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -113,9 +118,13 @@ import com.artificialinsightsllc.teamsync.TeamSyncApplication
 import com.artificialinsightsllc.teamsync.Services.LocationTrackingService
 import java.io.IOException
 import java.util.Locale
-import com.artificialinsightsllc.teamsync.Services.MarkerMonitorService
 
-class MainScreen(private val navController: NavHostController) { // navController is passed here
+// NEW: Add BorderStroke import for the close button
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape // Import CircleShape
+
+class MainScreen(private val navController: NavHostController) {
 
     data class MarkerDisplayInfo(
         val title: String,
@@ -290,6 +299,8 @@ class MainScreen(private val navController: NavHostController) { // navControlle
 
         var currentUserModel by remember { mutableStateOf<UserModel?>(null) }
 
+        // NEW: State for instructional overlay visibility
+        var showInstructionsOverlay by remember { mutableStateOf(false) }
 
         // --- LaunchedEffects for initial setup and state observation ---
 
@@ -306,6 +317,13 @@ class MainScreen(private val navController: NavHostController) { // navControlle
                     if (userSnapshot.exists()) {
                         currentUserModel = userSnapshot.toObject(UserModel::class.java)
                         Log.d("MainScreen", "User profile loaded: ${currentUserModel?.displayName}")
+
+                        // Check mainInstructionsSeen flag here
+                        if (currentUserModel?.mainInstructionsSeen != true) {
+                            showInstructionsOverlay = true
+                            // Don't save immediately, wait for user to close it.
+                        }
+
                     } else {
                         Log.w("MainScreen", "User document not found for ID: $userId")
                     }
@@ -782,6 +800,57 @@ class MainScreen(private val navController: NavHostController) { // navControlle
                             }
                         }
                     )
+                }
+            }
+
+            // NEW: Instructional Overlay
+            AnimatedVisibility(
+                visible = showInstructionsOverlay,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.5f)) // Semi-transparent black background
+                ) {
+                    // Instructional Graphic
+                    Image(
+                        painter = painterResource(id = R.drawable.instructions), // Your drawable
+                        contentDescription = "Instructions",
+                        modifier = Modifier
+                            .align(Alignment.Center) // Center the image
+                            .fillMaxWidth(),
+                        contentScale = ContentScale.Fit // IMPORTANT: Fit to prevent stretching
+                    )
+
+                    // Close Button (top right)
+                    FloatingActionButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                showInstructionsOverlay = false
+                                currentUserModel?.let { user ->
+                                    val updatedUser = user.copy(mainInstructionsSeen = true)
+                                    firestoreService.saveUserProfile(updatedUser).onSuccess {
+                                        Log.d("MainScreen", "mainInstructionsSeen updated to true in Firestore.")
+                                        currentUserModel = updatedUser // Update local state immediately
+                                    }.onFailure { e ->
+                                        Log.e("MainScreen", "Failed to update mainInstructionsSeen: ${e.message}")
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 30.dp, end = 16.dp) // Maintain padding
+                            .border(2.dp, Color.Black, CircleShape), // Correct way to add border
+                        containerColor = Color(0xFFFF0000), // Bright red
+                        contentColor = Color.White, // White 'X'
+                        shape = CircleShape // Use CircleShape directly from material3
+                    ) {
+                        Icon(Icons.Filled.Close, "Close Instructions")
+                    }
                 }
             }
         }

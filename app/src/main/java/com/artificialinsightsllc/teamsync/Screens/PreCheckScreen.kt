@@ -2,11 +2,13 @@
 package com.artificialinsightsllc.teamsync.Screens
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
@@ -59,6 +61,9 @@ import com.artificialinsightsllc.teamsync.Services.LocationTrackingService
 import com.artificialinsightsllc.teamsync.TeamSyncApplication
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.delay // Import delay
+import kotlinx.coroutines.launch // Import launch
+import androidx.compose.runtime.rememberCoroutineScope // Import rememberCoroutineScope
 import kotlinx.coroutines.tasks.await
 
 class PreCheckScreen(private val navController: NavHostController) {
@@ -69,7 +74,8 @@ class PreCheckScreen(private val navController: NavHostController) {
         LOCATION_BACKGROUND, // ACCESS_BACKGROUND_LOCATION
         CAMERA,
         READ_MEDIA, // READ_MEDIA_IMAGES or READ_EXTERNAL_STORAGE
-        POST_NOTIFICATIONS
+        POST_NOTIFICATIONS,
+        BATTERY_OPTIMIZATION // NEW: For ignoring battery optimizations
     }
 
     // Data class to hold information for each permission type, used in UI
@@ -77,7 +83,9 @@ class PreCheckScreen(private val navController: NavHostController) {
         val type: PermissionType,
         val title: String,
         val description: String,
-        val manifestPermissions: Array<String>
+        val manifestPermissions: Array<String>? = null, // Nullable for BATTERY_OPTIMIZATION
+        val isSystemSetting: Boolean = false, // NEW: Indicates if it's a system setting
+        val direction: String? = null // NEW: Specific instruction for the user
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -88,7 +96,11 @@ class PreCheckScreen(private val navController: NavHostController) {
             if (type != other.type) return false
             if (title != other.title) return false
             if (description != other.description) return false
-            if (!manifestPermissions.contentEquals(other.manifestPermissions)) return false
+            if (manifestPermissions != null) {
+                if (other.manifestPermissions == null || !manifestPermissions.contentEquals(other.manifestPermissions)) return false
+            } else if (other.manifestPermissions != null) return false
+            if (isSystemSetting != other.isSystemSetting) return false // NEW: Compare this field too
+            if (direction != other.direction) return false // NEW: Compare direction
 
             return true
         }
@@ -97,7 +109,9 @@ class PreCheckScreen(private val navController: NavHostController) {
             var result = type.hashCode()
             result = 31 * result + title.hashCode()
             result = 31 * result + description.hashCode()
-            result = 31 * result + manifestPermissions.contentHashCode()
+            result = 31 * result + (manifestPermissions?.contentHashCode() ?: 0)
+            result = 31 * result + isSystemSetting.hashCode() // NEW: Include in hashcode
+            result = 31 * result + (direction?.hashCode() ?: 0) // NEW: Include direction in hashcode
             return result
         }
     }
@@ -108,34 +122,49 @@ class PreCheckScreen(private val navController: NavHostController) {
             type = PermissionType.LOCATION_FOREGROUND,
             title = "Location (Precise)",
             description = "TeamSync needs your precise location to show your position and your group members' positions on the map. This is fundamental for the app's core mapping features.",
-            manifestPermissions = getManifestPermissionsForType(PermissionType.LOCATION_FOREGROUND)
+            manifestPermissions = getManifestPermissionsForType(PermissionType.LOCATION_FOREGROUND),
+            direction = "Choose 'Allow all the time' or 'Allow only while using the app'" // Specific direction
         ))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             add(PermissionInfo(
                 type = PermissionType.LOCATION_BACKGROUND,
                 title = "Location (Background)",
                 description = "For continuous team coordination and real-time tracking, TeamSync requires background location access. This allows your location to update even when the app is closed or not in active use, ensuring your team always knows your last known position.",
-                manifestPermissions = getManifestPermissionsForType(PermissionType.LOCATION_BACKGROUND)
+                manifestPermissions = getManifestPermissionsForType(PermissionType.LOCATION_BACKGROUND),
+                direction = "Choose 'Allow all the time' or 'Allow in background'" // Specific direction
             ))
         }
         add(PermissionInfo(
             type = PermissionType.CAMERA,
             title = "Camera Access",
             description = "TeamSync needs access to your camera if you wish to take new photos directly within the app, for example, to set your profile picture or add geotagged images to the map.",
-            manifestPermissions = getManifestPermissionsForType(PermissionType.CAMERA)
+            manifestPermissions = getManifestPermissionsForType(PermissionType.CAMERA),
+            direction = "Choose 'Allow' or 'While using the app'" // Specific direction
         ))
         add(PermissionInfo(
             type = PermissionType.READ_MEDIA,
             title = "Photos/Media Access",
             description = "TeamSync needs access to your photos and media to allow you to select and upload existing images from your device's gallery, for instance, to set your profile picture or share media with your group.",
-            manifestPermissions = getManifestPermissionsForType(PermissionType.READ_MEDIA)
+            manifestPermissions = getManifestPermissionsForType(PermissionType.READ_MEDIA),
+            direction = "Choose 'Allow'" // Specific direction
         ))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(PermissionInfo(
                 type = PermissionType.POST_NOTIFICATIONS,
                 title = "Notifications",
                 description = "On Android 13 (API 33) and higher, TeamSync needs permission to post notifications. This is essential for receiving important updates, alerts (like critical location events), and for the background location service to run without interruption.",
-                manifestPermissions = getManifestPermissionsForType(PermissionType.POST_NOTIFICATIONS)
+                manifestPermissions = getManifestPermissionsForType(PermissionType.POST_NOTIFICATIONS),
+                direction = "Choose 'Allow' or 'Enable'" // Specific direction
+            ))
+        }
+        // NEW: Battery Optimization exemption
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) { // API 23+ for battery optimizations
+            add(PermissionInfo(
+                type = PermissionType.BATTERY_OPTIMIZATION,
+                title = "Unrestricted Battery Usage",
+                description = "For reliable, continuous background location tracking, TeamSync needs to be exempt from battery optimizations. This prevents the Android system from putting the app to sleep, ensuring your team always has your up-to-date location. This is crucial for real-time coordination.",
+                isSystemSetting = true, // Mark as a system setting
+                direction = "Choose 'Unrestricted' or 'Not optimized'" // Specific direction
             ))
         }
     }
@@ -171,10 +200,20 @@ class PreCheckScreen(private val navController: NavHostController) {
                     true // Not needed on older Android versions
                 }
             }
+            // NEW: Check for battery optimization exemption
+            PermissionType.BATTERY_OPTIMIZATION -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val packageName = context.packageName
+                    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                    pm.isIgnoringBatteryOptimizations(packageName)
+                } else {
+                    true // Not applicable on older Android versions
+                }
+            }
         }
     }
 
-    private fun getManifestPermissionsForType(permissionType: PermissionType): Array<String> {
+    private fun getManifestPermissionsForType(permissionType: PermissionType): Array<String>? { // Changed return type to Array<String>?
         return when (permissionType) {
             PermissionType.LOCATION_FOREGROUND -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
             PermissionType.LOCATION_BACKGROUND -> arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -185,7 +224,8 @@ class PreCheckScreen(private val navController: NavHostController) {
                 arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
             PermissionType.POST_NOTIFICATIONS -> arrayOf(Manifest.permission.POST_NOTIFICATIONS)
-        }.filterNotNull().toTypedArray()
+            PermissionType.BATTERY_OPTIMIZATION -> null // No direct manifest permission
+        }?.filterNotNull()?.toTypedArray() // Filter nulls and convert to array
     }
 
     // --- Services Start/Stop helpers (These are NOT called from here anymore) ---
@@ -234,6 +274,7 @@ class PreCheckScreen(private val navController: NavHostController) {
         val context = LocalContext.current
         val groupMonitorService = (context.applicationContext as TeamSyncApplication).groupMonitorService
         val firestore = FirebaseFirestore.getInstance()
+        val coroutineScope = rememberCoroutineScope() // Coroutine scope for delayed re-check
 
         // State to manage overall loading/checking phase
         var showLoadingIndicator by remember { mutableStateOf(true) }
@@ -253,6 +294,15 @@ class PreCheckScreen(private val navController: NavHostController) {
         // State to store the user's selected active group ID fetched from Firestore
         var initialUserSelectedGroupId by remember { mutableStateOf<String?>(null) }
 
+        // NEW: State for AlertDialog
+        var showAlertDialog by remember { mutableStateOf(false) }
+        var alertDialogTitle by remember { mutableStateOf("") }
+        var alertDialogMessage by remember { mutableStateOf("") }
+        var alertDialogConfirmAction: (() -> Unit)? by remember { mutableStateOf(null) }
+
+        // NEW: State for Re-Check Permissions Button
+        var showRecheckButton by remember { mutableStateOf(false) }
+
 
         // --- Permission Launcher for system dialogs ---
         val permissionLauncher = rememberLauncherForActivityResult(
@@ -260,7 +310,25 @@ class PreCheckScreen(private val navController: NavHostController) {
         ) { permissionsMap ->
             Log.d("PreCheckScreen", "System permission dialog result received. Updating permission states.")
             updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo) // Update UI immediately
+            if (!allPermissionsFullyGranted) { // If not all granted after a manifest permission request
+                showRecheckButton = true // Show recheck button
+            }
             // The LaunchedEffect(allPermissionsFullyGranted) will now handle navigation if all are granted.
+        }
+
+        // NEW: Launcher for battery optimization settings
+        val batteryOptimizationLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.StartActivityForResult()
+        ) {
+            // After returning from settings, re-check all permissions WITH A DELAY
+            Log.d("PreCheckScreen", "Returned from Battery Optimization settings. Scheduling re-check with delay.")
+            coroutineScope.launch {
+                delay(300L) // Small delay to allow system state to update
+                updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo)
+                if (!allPermissionsFullyGranted) { // If not all granted after battery opt attempt
+                    showRecheckButton = true // Show recheck button
+                }
+            }
         }
 
 
@@ -284,10 +352,14 @@ class PreCheckScreen(private val navController: NavHostController) {
                     Log.d("PreCheckScreen", "User profile loaded, selected active group ID: ${initialUserSelectedGroupId ?: "None"}")
                 } catch (e: Exception) {
                     Log.e("PreCheckScreen", "Error loading user profile: ${e.message}")
-                    Toast.makeText(context, "Error loading user data: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                    navController.navigate(NavRoutes.LOGIN) {
-                        popUpTo(NavRoutes.PRE_CHECK) { inclusive = true }
+                    alertDialogTitle = "Error Loading User Data"
+                    alertDialogMessage = "Failed to load your user profile: ${e.localizedMessage}. Please try logging in again."
+                    alertDialogConfirmAction = {
+                        navController.navigate(NavRoutes.LOGIN) {
+                            popUpTo(NavRoutes.PRE_CHECK) { inclusive = true }
+                        }
                     }
+                    showAlertDialog = true
                     return@LaunchedEffect
                 }
                 initialUserCheckDone = true // Mark as done to prevent re-running
@@ -295,6 +367,11 @@ class PreCheckScreen(private val navController: NavHostController) {
 
             // After user check, update all permission states initially
             updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo)
+
+            // Determine if recheck button should be visible after initial load
+            if (!allPermissionsFullyGranted) {
+                showRecheckButton = true
+            }
 
             // Auto-navigate if all are already granted on launch
             // The check for allPermissionsFullyGranted is now handled by the separate LaunchedEffect below
@@ -367,26 +444,113 @@ class PreCheckScreen(private val navController: NavHostController) {
                     requiredPermissionsInfo.forEach { permInfo ->
                         val isGranted = permissionStates.value[permInfo.type] == true
                         val buttonColor = if (isGranted) Color(0xFF4CAF50) else Color(0xFFF44336) // Green vs Red
-                        val isLocationForegroundGranted = permissionStates.value[PermissionType.LOCATION_FOREGROUND] == true
 
                         // Special handling for Background Location button enable state
+                        // and NEW: Battery Optimization button enable state
                         val buttonEnabled = when (permInfo.type) {
-                            PermissionType.LOCATION_BACKGROUND -> isLocationForegroundGranted // Only enabled if foreground is granted
-                            else -> true // Other buttons are always enabled (unless granted)
+                            PermissionType.LOCATION_BACKGROUND -> permissionStates.value[PermissionType.LOCATION_FOREGROUND] == true
+                            PermissionType.BATTERY_OPTIMIZATION -> true // Always enabled, just launches system settings
+                            else -> true
                         }
 
                         PermissionItemCard(
                             title = permInfo.title,
+                            direction = permInfo.direction, // Pass the new direction parameter (moved up)
                             description = permInfo.description,
                             isGranted = isGranted,
                             buttonColor = buttonColor,
                             buttonEnabled = buttonEnabled,
                             onGrantClick = {
-                                // Direct launch of system permission dialog
-                                if (!isGranted) {
-                                    permissionLauncher.launch(permInfo.manifestPermissions)
+                                if (permInfo.isSystemSetting) {
+                                    // Handle system settings intents separately
+                                    if (permInfo.type == PermissionType.BATTERY_OPTIMIZATION) {
+                                        val packageName = context.packageName
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                                            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                                                // Function to attempt launching an intent and showing a fallback dialog
+                                                fun attemptLaunchBatterySettings(index: Int) {
+                                                    val intentsToTry = listOf(
+                                                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                                            data = Uri.fromParts("package", packageName, null)
+                                                        },
+                                                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                                            data = Uri.fromParts("package", packageName, null)
+                                                        },
+                                                        Intent(Settings.ACTION_SETTINGS)
+                                                    )
+
+                                                    if (index >= intentsToTry.size) { // No more intents to try, show final manual dialog
+                                                        Log.e("PreCheckScreen", "All programmatic attempts to open battery optimization settings failed.")
+                                                        alertDialogTitle = "Action Required: Manual Steps"
+                                                        alertDialogMessage = "Could not open any relevant settings automatically. Please manually navigate to your device's settings:\n\n1. Go to 'Settings'\n2. Tap 'Apps & notifications' (or 'Apps' / 'Applications')\n3. Find and tap 'TeamSync'\n4. Tap 'Battery' (or 'Battery usage')\n5. Choose 'Unrestricted' or 'Not optimized'. This is essential for continuous background tracking."
+                                                        alertDialogConfirmAction = null // No specific action needed after this
+                                                        showAlertDialog = true
+                                                        return
+                                                    }
+
+                                                    val intent = intentsToTry[index]
+                                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                                                    if (intent.resolveActivity(context.packageManager) != null) {
+                                                        Log.d("PreCheckScreen", "Attempting to launch intent: ${intent.action} (Index: $index) for $packageName")
+                                                        try {
+                                                            batteryOptimizationLauncher.launch(intent)
+                                                        } catch (e: Exception) {
+                                                            Log.e("PreCheckScreen", "Exception launching intent ${intent.action} (Index: $index): ${e.message}", e)
+                                                            // If launch fails, tell user and offer next step via dialog
+                                                            alertDialogTitle = "Battery Optimization Settings"
+                                                            alertDialogMessage = "Could not open settings using this method. Please try the next option.\n\nError: ${e.localizedMessage}"
+                                                            alertDialogConfirmAction = { attemptLaunchBatterySettings(index + 1) }
+                                                            showAlertDialog = true
+                                                        }
+                                                    } else {
+                                                        Log.w("PreCheckScreen", "Intent ${intent.action} (Index: $index) cannot be resolved on this device. Trying next.")
+                                                        // If intent cannot be resolved, immediately try the next one via a dialog
+                                                        alertDialogTitle = "Battery Optimization Settings"
+                                                        alertDialogMessage = "This method is not supported on your device. Please try the next option."
+                                                        alertDialogConfirmAction = { attemptLaunchBatterySettings(index + 1) }
+                                                        showAlertDialog = true
+                                                    }
+                                                }
+
+                                                // Start the sequence of attempts. The dialogs will handle progression.
+                                                // First, confirm to the user what's about to happen.
+                                                alertDialogTitle = "Open Battery Settings"
+                                                alertDialogMessage = "TeamSync will now attempt to open your device's battery optimization settings. Please tap 'OK' to proceed. You may need to manually select 'Unrestricted' or 'Not optimized' for TeamSync on the next screen."
+                                                alertDialogConfirmAction = { attemptLaunchBatterySettings(0) }
+                                                showAlertDialog = true
+
+                                            } else {
+                                                alertDialogTitle = "${permInfo.title} is already granted!"
+                                                alertDialogMessage = "This permission is already set to 'Unrestricted' or 'Not optimized'.\n\nIf you wish to change this, you can do so manually via 'Settings > Apps & notifications > TeamSync > Battery'."
+                                                alertDialogConfirmAction = null
+                                                showAlertDialog = true
+                                            }
+                                        }
+                                    }
                                 } else {
-                                    Toast.makeText(context, "${permInfo.title} is already granted!", Toast.LENGTH_SHORT).show()
+                                    // Handle regular manifest permissions
+                                    if (!isGranted) {
+                                        permInfo.manifestPermissions?.let {
+                                            permissionLauncher.launch(it)
+                                        } ?: run {
+                                            alertDialogTitle = "Permission Error"
+                                            alertDialogMessage = "Failed to request permission for ${permInfo.title}. This type of permission has no manifest entry."
+                                            alertDialogConfirmAction = null
+                                            showAlertDialog = true
+                                        }
+                                    }
+                                    // If already granted, show dialog. This is handled by the check below in this block.
+                                    // No 'else' needed here, as the outer 'if (!isGranted)' already covers it.
+                                }
+                                // This 'else' block applies if the permission is *already granted* (isGranted = true) for regular manifest permissions
+                                // and the battery optimization check above wasn't met.
+                                if (isGranted && !permInfo.isSystemSetting) { // Only show for manifest permissions if already granted
+                                    alertDialogTitle = "${permInfo.title} is already granted!"
+                                    alertDialogMessage = "This permission is already set to '${permInfo.direction}'. You do not need to take any action."
+                                    alertDialogConfirmAction = null
+                                    showAlertDialog = true
                                 }
                             }
                         )
@@ -401,6 +565,20 @@ class PreCheckScreen(private val navController: NavHostController) {
                             fontSize = 14.sp,
                             textAlign = TextAlign.Center
                         )
+                        // NEW: Re-Check Permissions Button
+                        if (showRecheckButton) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = {
+                                    Log.d("PreCheckScreen", "Re-Check Permissions button clicked. Updating all permission states.")
+                                    updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo)
+                                },
+                                modifier = Modifier.fillMaxWidth(0.7f),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                            ) {
+                                Text("Re-Check Permissions", color = Color.White)
+                            }
+                        }
                     } else {
                         // Optional: Show a "All permissions granted, proceeding..." message briefly
                         Text(
@@ -414,12 +592,28 @@ class PreCheckScreen(private val navController: NavHostController) {
             }
         }
 
-        // Removed the PermissionRationaleDialog composable and its conditional rendering block
+        // Generic AlertDialog for messages
+        if (showAlertDialog) {
+            AlertDialog(
+                onDismissRequest = { showAlertDialog = false },
+                title = { Text(alertDialogTitle) },
+                text = { Text(alertDialogMessage) },
+                confirmButton = {
+                    Button(onClick = {
+                        showAlertDialog = false
+                        alertDialogConfirmAction?.invoke() // Execute the stored action
+                    }) {
+                        Text("OK")
+                    }
+                }
+            )
+        }
     }
 
     @Composable
     private fun PermissionItemCard(
         title: String,
+        direction: String?, // NEW: direction parameter
         description: String,
         isGranted: Boolean,
         buttonColor: Color,
@@ -441,6 +635,15 @@ class PreCheckScreen(private val navController: NavHostController) {
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
+            // NEW: Display specific direction if available
+            direction?.let {
+                Text(
+                    text = "Direction: ${it}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Red // Bold red color
+                )
+            }
             Text(
                 text = description,
                 fontSize = 14.sp,
@@ -461,9 +664,9 @@ class PreCheckScreen(private val navController: NavHostController) {
                     color = Color.White
                 )
             }
-            if (!buttonEnabled && !isGranted) { // Show message if disabled due to dependency
+            if (!buttonEnabled && !isGranted) { // Show message if disabled due to dependency (e.g. background location needs foreground first)
                 Text(
-                    text = "Requires Foreground Location first.",
+                    text = "Requires Foreground Location first.", // This specific message only applies to background location
                     fontSize = 12.sp,
                     color = Color.Gray
                 )

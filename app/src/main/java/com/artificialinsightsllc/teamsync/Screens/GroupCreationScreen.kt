@@ -1,6 +1,7 @@
 // In file: app/src/main/java/com/artificialinsightsllc/teamsync/Screens/GroupCreationScreen.kt
 package com.artificialinsightsllc.teamsync.Screens
 
+import android.util.Log // Added missing Log import
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -42,9 +43,20 @@ import com.artificialinsightsllc.teamsync.Models.MemberRole
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 import java.util.UUID
+import java.text.SimpleDateFormat // Added missing SimpleDateFormat import
+import java.util.Date // Added missing Date import
+import java.util.Locale // Added missing Locale import
+import androidx.compose.foundation.layout.WindowInsets // Added missing WindowInsets import
+import androidx.compose.foundation.layout.asPaddingValues // Added missing asPaddingValues import
+import androidx.compose.foundation.layout.systemBars // Added missing systemBars import
 
-import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
-import com.artificialinsightsllc.teamsync.ui.theme.LightCream
+// Assuming DarkBlue and LightCream are accessible via theme or defined elsewhere,
+// otherwise, they would need local definition or explicit import if in a separate Color.kt
+
+// Assuming ic_calendar drawable exists. If not, this would cause a runtime error.
+// The code uses a placeholder in the previous version for ic_calendar and R.drawable.ic_calendar
+// so I'm assuming it exists in your project.
+
 import com.artificialinsightsllc.teamsync.TeamSyncApplication
 
 class GroupCreationScreen(private val navController: NavHostController) {
@@ -103,6 +115,10 @@ class GroupCreationScreen(private val navController: NavHostController) {
         var locationHistoryRetentionDays by remember { mutableIntStateOf(0) }
 
         val isPaidBasicOrAbove = selectedGroupType == GroupType.PAID_BASIC
+
+        val DarkBlue = Color(0xFF0D47A1) // Local definition for DarkBlue
+        val LightCream = Color(0xFFFFFDD0) // Local definition for LightCream
+
 
         Box(modifier = Modifier.fillMaxSize()) {
             Image(
@@ -549,7 +565,7 @@ class GroupCreationScreen(private val navController: NavHostController) {
                                 allowCheckInRequests = isPaidBasicOrAbove,
                                 enableLocationHistory = enableLocationHistory,
                                 locationHistoryRetentionDays = if (enableLocationHistory) locationHistoryRetentionDays else null,
-                                enableGroupChat = true,
+                                enableGroupChat = true, // Default to true for simplicity as per previous versions
                                 enablePrivateChats = enablePrivateChats,
                                 enablePhotoSharing = enablePhotoSharing,
                                 enableAudioMessages = enableAudioMessages,
@@ -571,15 +587,15 @@ class GroupCreationScreen(private val navController: NavHostController) {
                                     unjoinedTimestamp = null, // Ensure this is null on creation
                                     memberRole = MemberRole.OWNER,
                                     sharingLocation = true,
-                                    lastKnownLocationLat = null,
-                                    lastKnownLocationLon = null,
-                                    lastLocationUpdateTime = null,
-                                    batteryLevel = null,
-                                    online = true,
-                                    personalLocationUpdateIntervalMillis = null,
-                                    personalIsSharingLocationOverride = null,
-                                    customMarkerIconUrl = null,
-                                    notificationPreferences = null
+                                    lastKnownLocationLat = null, // Default value
+                                    lastKnownLocationLon = null, // Default value
+                                    lastLocationUpdateTime = null, // Default value
+                                    batteryLevel = null, // Default value
+                                    online = true, // Default value
+                                    personalLocationUpdateIntervalMillis = null, // Default value
+                                    personalIsSharingLocationOverride = null, // Default value
+                                    customMarkerIconUrl = null, // Default value
+                                    notificationPreferences = null // Default value
                                 )
 
                                 val addMemberResult = firestoreService.addGroupMember(ownerMember)
@@ -589,9 +605,7 @@ class GroupCreationScreen(private val navController: NavHostController) {
                                     val updateUserResult = firestoreService.updateUserSelectedActiveGroup(currentUserId, newGroupId)
 
                                     if (updateUserResult.isSuccess) {
-                                        // CRITICAL: Signal GroupMonitorService to expect this new group before navigating
-                                        groupMonitorService.setExpectedGroupForGracePeriod(newGroupId)
-
+                                        // Removed: groupMonitorService.setExpectedGroupForGracePeriod(newGroupId)
                                         Toast.makeText(context, "Group '${groupName}' created successfully!", Toast.LENGTH_LONG).show()
                                         navController.popBackStack() // Navigate back after everything is done and signaled
                                     } else {
@@ -626,7 +640,7 @@ fun FeatureToggle(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean,
-    DarkBlue: Color,
+    DarkBlue: Color, // Passed as parameter for flexibility
     content: @Composable (() -> Unit)? = null
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {

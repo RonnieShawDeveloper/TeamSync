@@ -21,20 +21,29 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Job // Import Job
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.map // Explicitly import map for derived StateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 
 class GroupMonitorService(
-    private val context: Context,
+    internal val context: Context,
     private val firestoreService: FirestoreService = FirestoreService(),
     internal val auth: FirebaseAuth = FirebaseAuth.getInstance(),
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
     private val markerMonitorService: MarkerMonitorService
 ) {
     private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    public enum class GroupDetailsStatus {
+        LOADING,           // Initial state, or after a membership changes and we're fetching new group details
+        ACTIVE,            // Group details loaded, and groupEndTimestamp is in the future
+        EXPIRED,           // Group details loaded, and groupEndTimestamp is in the past
+        NOT_FOUND,         // Group document does not exist in Firestore (e.g., deleted by owner)
+        ERROR              // An error occurred while fetching group details (e.g., network issue)
+    }
 
     private val _activeGroupMember = MutableStateFlow<GroupMembers?>(null)
     val activeGroupMember: StateFlow<GroupMembers?> = _activeGroupMember.asStateFlow()
@@ -48,8 +57,8 @@ class GroupMonitorService(
     private val _effectiveLocationUpdateInterval = MutableStateFlow(300000L)
     val effectiveLocationUpdateInterval: StateFlow<Long> = _effectiveLocationUpdateInterval.asStateFlow()
 
-    private val _isLocationSharingGloballyEnabled = MutableStateFlow(true)
-    val isLocationSharingGloballyEnabled: StateFlow<Boolean> = _isLocationSharingGloballyEnabled.asStateFlow()
+    val isLocationSharingGloballyEnabled: StateFlow<Boolean> = _isInActiveGroup.asStateFlow()
+
 
     private val _otherGroupMembers = MutableStateFlow<List<GroupMembers>>(emptyList())
     val otherGroupMembers: StateFlow<List<GroupMembers>> = _otherGroupMembers.asStateFlow()
@@ -63,9 +72,8 @@ class GroupMonitorService(
     private val _userMessage = MutableStateFlow<String?>(null)
     val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
 
-    private val _isInitialGroupMembershipLoaded = MutableStateFlow(false)
-    // Renamed and made observable via StateFlow for combine
-    private val _expectedGroupIdForGracePeriod = MutableStateFlow<String?>(null)
+    private val _groupDetailsStatus = MutableStateFlow(GroupDetailsStatus.LOADING)
+    val groupDetailsStatus: StateFlow<GroupDetailsStatus> = _groupDetailsStatus.asStateFlow()
 
 
     private var currentUserGroupMembershipsListener: ListenerRegistration? = null
@@ -77,13 +85,14 @@ class GroupMonitorService(
     private val _uiPermissionsGranted = MutableStateFlow(false)
     val uiPermissionsGranted: StateFlow<Boolean> = _uiPermissionsGranted.asStateFlow()
 
+    private var locationTrackingIntentJob: Job? = null
+
     init {
         Log.d("GroupMonitorService", "GroupMonitorService initialized. Awaiting explicit startMonitoring call.")
     }
 
     /**
      * Public method to set the permission status from the UI (MainScreen).
-     * This will trigger the main combine flow to re-evaluate service startup.
      * @param granted True if all necessary runtime permissions are granted, false otherwise.
      */
     fun setUiPermissionsGranted(granted: Boolean) {
@@ -93,26 +102,6 @@ class GroupMonitorService(
         }
     }
 
-    /**
-     * Sets an expected group ID. This is used to create a grace period during group transitions
-     * (e.g., after creating a new group) to prevent premature auto-unjoins due to transient Firestore states.
-     * @param groupId The ID of the group that is expected to become active, or null to clear expectation.
-     */
-    fun setExpectedGroupForGracePeriod(groupId: String?) {
-        _expectedGroupIdForGracePeriod.value = groupId
-        if (groupId != null) {
-            Log.d("GroupMonitorService", "Set expected group ID for grace period: $groupId")
-            // Optionally, reset initial load status if we are starting a new group transition
-            _isInitialGroupMembershipLoaded.value = false
-        } else {
-            Log.d("GroupMonitorService", "Cleared expected group ID for grace period.")
-        }
-    }
-
-
-    /**
-     * Stops listeners for other members' profile data and clears the profile map.
-     */
     private fun stopOtherMembersProfilesListeners() {
         otherMembersProfilesListeners.values.forEach { it.remove() }
         otherMembersProfilesListeners.clear()
@@ -120,9 +109,6 @@ class GroupMonitorService(
         Log.d("GroupMonitorService", "Stopped other members' profile listeners.")
     }
 
-    /**
-     * Stops the listener for other members' location data and clears the location list.
-     */
     private fun stopOtherMembersLocationsListener() {
         otherMembersLocationsListener?.remove()
         otherMembersLocationsListener = null
@@ -130,9 +116,6 @@ class GroupMonitorService(
         Log.d("GroupMonitorService", "Stopped other members' locations listener.")
     }
 
-    /**
-     * Stops all listeners related to other group members (memberships, locations, profiles).
-     */
     private fun stopOtherMembersListeners() {
         otherGroupMembersListener?.remove()
         otherGroupMembersListener = null
@@ -143,9 +126,6 @@ class GroupMonitorService(
         Log.d("GroupMonitorService", "Stopped other members' data listeners.")
     }
 
-    /**
-     * Stops all Firestore listeners managed by this service.
-     */
     fun stopAllListeners() {
         currentUserGroupMembershipsListener?.remove()
         currentUserGroupMembershipsListener = null
@@ -154,147 +134,164 @@ class GroupMonitorService(
         stopOtherMembersListeners()
         markerMonitorService.stopMonitoringMarkers()
         Log.d("GroupMonitorService", "Stopped all Firestore listeners.")
-        _isInitialGroupMembershipLoaded.value = false
-        setExpectedGroupForGracePeriod(null) // Clear any pending grace period expectation
+        _groupDetailsStatus.value = GroupDetailsStatus.LOADING
+        locationTrackingIntentJob?.cancel()
     }
 
-    /**
-     * Starts monitoring group data based on authentication status and UI permissions.
-     * This method will now be called from MainScreen once permissions are handled.
-     * @param expectedGroupId If provided, the service will explicitly expect this group to become active.
-     */
-    fun startMonitoring(expectedGroupId: String? = null) {
-        // Set the internal StateFlow to indicate we are expecting a group transition.
-        // This will be observed by the combine block to prevent premature unjoins.
-        setExpectedGroupForGracePeriod(expectedGroupId)
+    private fun sendLocationTrackingIntentDebounced(interval: Long, isSharing: Boolean, stopServiceCompletely: Boolean, memberId: String?) {
+        locationTrackingIntentJob?.cancel()
+        locationTrackingIntentJob = monitorScope.launch {
+            delay(100)
+            sendLocationTrackingUpdateIntent(interval, isSharing, stopServiceCompletely, memberId)
+        }
+    }
 
-        // Only add auth state listener once.
+    private fun sendLocationTrackingUpdateIntent(interval: Long, isSharing: Boolean, stopServiceCompletely: Boolean, memberId: String?) {
+        val intent = Intent(context, LocationTrackingService::class.java).apply {
+            action = if (stopServiceCompletely) LocationTrackingService.ACTION_STOP_SERVICE else LocationTrackingService.ACTION_UPDATE_TRACKING_STATE
+            putExtra(LocationTrackingService.EXTRA_LOCATION_INTERVAL, interval)
+            putExtra(LocationTrackingService.EXTRA_IS_SHARING_LOCATION, isSharing)
+            putExtra(LocationTrackingService.EXTRA_ACTIVE_GROUP_MEMBER_ID, memberId)
+        }
+        if (stopServiceCompletely) {
+            context.stopService(intent)
+            Log.d("GroupMonitorService", "Explicitly sending ACTION_STOP_SERVICE to LocationTrackingService.")
+        } else {
+            context.startService(intent)
+            Log.d("GroupMonitorService", "Sending ACTION_UPDATE_TRACKING_STATE to LocationTrackingService: isSharing=$isSharing, interval=$interval, memberId=$memberId.")
+        }
+    }
+
+    fun startMonitoring(selectedActiveGroupId: String? = null) {
         if (currentUserGroupMembershipsListener == null) {
-            monitorScope.launch {
-                auth.addAuthStateListener { firebaseAuth ->
-                    val user = firebaseAuth.currentUser
-                    if (user != null) {
-                        Log.d("GroupMonitorService", "User logged in: ${user.uid}. Starting group member listener (gated by UI permissions).")
-                        listenForCurrentUserGroupMemberships(user.uid)
-                    } else {
-                        Log.d("GroupMonitorService", "User logged out. Stopping all monitoring.")
-                        stopAllListeners()
-                        _activeGroupMember.value = null
-                        _activeGroup.value = null
-                        _isInActiveGroup.value = false
-                        // On logout, explicitly send stop signal to service (it should already be stopped if not in group)
-                        sendLocationTrackingUpdateIntent(0L, false, true) // Action STOP_SERVICE
-                        _userMessage.value = "You have been logged out."
-                    }
+            auth.addAuthStateListener { firebaseAuth ->
+                val user = firebaseAuth.currentUser
+                if (user != null) {
+                    Log.d("GroupMonitorService", "User logged in: ${user.uid}. Starting group member listener (gated by UI permissions).")
+                    listenForCurrentUserGroupMemberships(user.uid, selectedActiveGroupId)
+                } else {
+                    Log.d("GroupMonitorService", "User logged out. Stopping all monitoring.")
+                    stopAllListeners()
+                    _activeGroupMember.value = null
+                    _activeGroup.value = null
+                    _isInActiveGroup.value = false
+                    sendLocationTrackingIntentDebounced(0L, false, true, null)
+                    _userMessage.value = "You have been logged out."
                 }
             }
         }
 
-
         monitorScope.launch {
+            var lastProcessedDesiredIsSharing: Boolean? = null
+            var lastProcessedDesiredInterval: Long? = null
+            var lastProcessedDesiredMemberId: String? = null
+
             combine(
                 _activeGroupMember,
                 _activeGroup,
-                _isLocationSharingGloballyEnabled,
-                _isInitialGroupMembershipLoaded,
-                _uiPermissionsGranted,
-                _expectedGroupIdForGracePeriod // NEW: Added as a dependency for combine to react to it
+                _groupDetailsStatus,
+                _uiPermissionsGranted
             ) { args: Array<Any?> ->
                 val member = args[0] as GroupMembers?
                 val group = args[1] as Groups?
-                val isSharingGloballyEnabled = args[2] as Boolean
-                val isInitialLoad = args[3] as Boolean
-                val uiPermissionsGranted = args[4] as Boolean
-                val expectedIdForGracePeriod = args[5] as String? // NEW: get value from combine args
+                val detailsStatus = args[2] as GroupDetailsStatus
+                val uiPermissionsGranted = args[3] as Boolean
 
                 val currentUserId = auth.currentUser?.uid
 
                 val memberIsActive = member != null && member.unjoinedTimestamp == null
                 val groupIsValidAndActive = group != null && (group.groupEndTimestamp?.let { it > System.currentTimeMillis() } ?: true)
-                val inGroup = memberIsActive && groupIsValidAndActive
 
-                // NEW: Logic to determine if we are in a "grace period" for group transition.
-                // This is true if we are expecting a specific group AND the member for that group
-                // has arrived, but the group details themselves (or correct active status) are still missing.
-                val inGroupTransitionGracePeriod = expectedIdForGracePeriod != null &&
-                        member?.groupId == expectedIdForGracePeriod &&
-                        !groupIsValidAndActive // Group data is not yet valid/active for the expected member
+                Log.d("GroupMonitorService", "Combine Evaluation: member=${member?.groupId}, group=${group?.groupID}, DetailsStatus=$detailsStatus, UI Permissions Granted: $uiPermissionsGranted")
 
-                Log.d("GroupMonitorService", "Combine Evaluation: member=${member?.groupId}, group=${group?.groupID}, ExpectedId=$expectedIdForGracePeriod, InGracePeriod=$inGroupTransitionGracePeriod, UI Permissions Granted: $uiPermissionsGranted")
+                val desiredIsSharing: Boolean
+                val desiredInterval: Long
+                val desiredMemberId: String?
 
+                when (detailsStatus) {
+                    GroupDetailsStatus.LOADING, GroupDetailsStatus.ERROR -> {
+                        desiredIsSharing = false
+                        desiredInterval = 0L
+                        desiredMemberId = member?.id
+                        Log.d("GroupMonitorService", "Group details are LOADING or ERROR. Not actively tracking.")
+                        _isInActiveGroup.value = false
+                        stopOtherMembersListeners()
+                        markerMonitorService.stopMonitoringMarkers()
+                    }
+                    GroupDetailsStatus.ACTIVE -> {
+                        if (memberIsActive && member?.groupId == group?.groupID) {
+                            val nonNullMember = member!!
+                            val nonNullGroup = group!!
 
-                // Handle automatic unjoining from expired groups
-                // IMPORTANT: Prevent auto-unjoin if we are currently in a group transition grace period.
-                if (!inGroupTransitionGracePeriod && memberIsActive && !groupIsValidAndActive && member?.unjoinedTimestamp == null) {
-                    Log.w("GroupMonitorService", "Active member (${member.userId}) found in expired group (${group?.groupName ?: member.groupId}). Automatically unjoining.")
-                    monitorScope.launch {
-                        val unjoinTimestamp = System.currentTimeMillis()
-                        val updatedMember = member.copy(unjoinedTimestamp = unjoinTimestamp)
-                        firestoreService.saveGroupMember(updatedMember).onSuccess {
-                            Log.d("GroupMonitorService", "Successfully marked membership ${member.id} as unjoined due to group expiration.")
-                            if (currentUserId != null) {
-                                val userProfile = firestoreService.getUserProfile(currentUserId).getOrNull()
-                                if (userProfile?.selectedActiveGroupId == member.groupId) {
+                            desiredIsSharing = uiPermissionsGranted // Always share if UI permissions are granted when group is active
+
+                            desiredInterval = nonNullMember.personalLocationUpdateIntervalMillis
+                                ?: nonNullGroup.locationUpdateIntervalMillis
+                                        ?: 300000L
+                            desiredMemberId = nonNullMember.id
+
+                            Log.d("GroupMonitorService", "Group is ACTIVE and member active. Desired tracking: $desiredIsSharing, interval: $desiredInterval.")
+                            _isInActiveGroup.value = true
+                            listenForOtherGroupMembers(nonNullGroup.groupID, nonNullMember.userId)
+                            markerMonitorService.startMonitoringMarkers(nonNullGroup.groupID)
+                        } else {
+                            desiredIsSharing = false
+                            desiredInterval = 0L
+                            desiredMemberId = member?.id
+                            Log.d("GroupMonitorService", "Group is ACTIVE but member is not. Not actively tracking.")
+                            _isInActiveGroup.value = false
+                            stopOtherMembersListeners()
+                            markerMonitorService.stopMonitoringMarkers()
+                        }
+                    }
+                    GroupDetailsStatus.EXPIRED, GroupDetailsStatus.NOT_FOUND -> {
+                        desiredIsSharing = false
+                        desiredInterval = 0L
+                        desiredMemberId = member?.id
+                        Log.d("GroupMonitorService", "Group EXPIRED or NOT_FOUND. Not actively tracking.")
+                        _isInActiveGroup.value = false
+                        stopOtherMembersListeners()
+                        markerMonitorService.stopMonitoringMarkers()
+
+                        if (memberIsActive && member?.unjoinedTimestamp == null && currentUserId != null && member?.groupId == _activeGroup.value?.groupID) {
+                            val messagePrefix = if (detailsStatus == GroupDetailsStatus.EXPIRED) "expired" else "no longer exists"
+                            Log.w("GroupMonitorService", "Active member (${member.userId}) found in $messagePrefix group (${_activeGroup.value?.groupName ?: member.groupId}). Automatically unjoining.")
+                            monitorScope.launch {
+                                val unjoinTimestamp = System.currentTimeMillis()
+                                val updatedMember = member.copy(unjoinedTimestamp = unjoinTimestamp)
+                                firestoreService.saveGroupMember(updatedMember).onSuccess {
+                                    Log.d("GroupMonitorService", "Successfully marked membership ${member.id} as unjoined due to group $messagePrefix.")
                                     firestoreService.updateUserSelectedActiveGroup(currentUserId, null).onSuccess {
                                         Log.d("GroupMonitorService", "Cleared selected active group for user $currentUserId.")
                                     }.onFailure { e ->
                                         Log.e("GroupMonitorService", "Failed to clear selected active group: ${e.message}")
                                     }
+                                    _userMessage.value = "Your active group '${_activeGroup.value?.groupName ?: "Unknown Group"}' has $messagePrefix. You have been automatically removed. Please create or join a new group."
+                                }.onFailure { e ->
+                                    Log.e("GroupMonitorService", "Failed to unjoin member from $messagePrefix group: ${e.message}")
+                                    _userMessage.value = "Error automatically removing you from expired group. Please try manually leaving the group."
                                 }
                             }
-                            _userMessage.value = "Your active group '${group?.groupName ?: "Unknown Group"}' has expired. You have been automatically removed. Please create or join a new group."
-                        }.onFailure { e ->
-                            Log.e("GroupMonitorService", "Failed to unjoin member from expired group: ${e.message}")
-                            _userMessage.value = "Error automatically removing you from expired group. Please try manually leaving the group."
+                        } else {
+                            Log.d("GroupMonitorService", "Group is EXPIRED/NOT_FOUND but member is already inactive or not current. No unjoin action needed.")
                         }
                     }
-                    _isInActiveGroup.value = false
-                    // When auto-unjoin, tell service to stop active tracking, but keep it foreground
-                    sendLocationTrackingUpdateIntent(0L, false, false) // Action UPDATE_TRACKING_STATE
-                    stopOtherMembersListeners()
-                    markerMonitorService.stopMonitoringMarkers()
-                    return@combine
                 }
 
-                // Decide on isInActiveGroup for UI
-                _isInActiveGroup.value = inGroup
+                if (desiredIsSharing != lastProcessedDesiredIsSharing ||
+                    desiredInterval != lastProcessedDesiredInterval ||
+                    desiredMemberId != lastProcessedDesiredMemberId) {
 
-                val interval = member?.personalLocationUpdateIntervalMillis
-                    ?: group?.locationUpdateIntervalMillis
-                    ?: 300000L
-                _effectiveLocationUpdateInterval.value = interval
+                    sendLocationTrackingIntentDebounced(desiredInterval, desiredIsSharing, false, desiredMemberId)
 
-                val sharingEnabled = member?.personalIsSharingLocationOverride
-                    ?: member?.sharingLocation
-                    ?: true
-                _isLocationSharingGloballyEnabled.value = sharingEnabled
-
-                // The decision to actually start/stop active tracking
-                val shouldStartActiveTracking = inGroup && sharingEnabled && uiPermissionsGranted
-
-                // Reset grace period flag once the expected group is definitively active
-                if (expectedIdForGracePeriod != null && member?.groupId == expectedIdForGracePeriod && group?.groupID == expectedIdForGracePeriod && member.unjoinedTimestamp == null) {
-                    setExpectedGroupForGracePeriod(null) // Clear the grace period expectation
-                    Log.d("GroupMonitorService", "Expected group ($expectedIdForGracePeriod) fully loaded and active. Grace period ended.")
-                }
-
-                // Send a signal to LocationTrackingService to update its tracking state
-                // This ensures the service is either actively tracking or just foreground (idle)
-                Log.d("GroupMonitorService", "Sending tracking update intent. Should track: $shouldStartActiveTracking, Interval: $interval")
-                sendLocationTrackingUpdateIntent(interval, shouldStartActiveTracking, false)
-
-                // Also manage other listeners (other members, map markers) based on whether we are in a group AND have UI permissions
-                if (inGroup && uiPermissionsGranted) {
-                    group?.groupID?.let { groupId ->
-                        member?.userId?.let { userId ->
-                            listenForOtherGroupMembers(groupId, userId)
-                            markerMonitorService.startMonitoringMarkers(groupId)
-                        }
-                    }
+                    lastProcessedDesiredIsSharing = desiredIsSharing
+                    lastProcessedDesiredInterval = desiredInterval
+                    lastProcessedDesiredMemberId = desiredMemberId
                 } else {
-                    stopOtherMembersListeners()
-                    markerMonitorService.stopMonitoringMarkers()
+                    Log.d("GroupMonitorService", "Location tracking intent state unchanged. Skipping dispatch.")
                 }
+
+                _effectiveLocationUpdateInterval.value = desiredInterval
 
             }.collect { /* collect to keep the flow active */ }
         }
@@ -304,20 +301,22 @@ class GroupMonitorService(
     /**
      * Listens for the current user's group memberships from Firestore.
      * @param userId The ID of the current authenticated user.
+     * @param initialSelectedGroupId An optional group ID to prioritize as active.
      */
-    private fun listenForCurrentUserGroupMemberships(userId: String) {
+    private fun listenForCurrentUserGroupMemberships(userId: String, initialSelectedGroupId: String?) {
         currentUserGroupMembershipsListener?.remove()
 
         currentUserGroupMembershipsListener = db.collection("groupMembers")
             .whereEqualTo("userId", userId)
             .addSnapshotListener { snapshots, e ->
+                Log.d("GroupMonitorService", "listenForCurrentUserGroupMemberships: Listener triggered for user $userId. Error: ${e?.message}, Snapshots: ${snapshots?.size()}")
                 if (e != null) {
                     Log.w("GroupMonitorService", "Listen for current user's group memberships failed.", e)
                     _activeGroupMember.value = null
                     _activeGroup.value = null
                     _isInActiveGroup.value = false
                     stopOtherMembersListeners()
-                    _isInitialGroupMembershipLoaded.value = true // Even if failed, initial load is done for this part
+                    _groupDetailsStatus.value = GroupDetailsStatus.ERROR
                     return@addSnapshotListener
                 }
 
@@ -326,17 +325,14 @@ class GroupMonitorService(
                         doc.toObject(GroupMembers::class.java)?.copy(id = doc.id)
                     }
                     val activeMemberships = allMemberships.filter { it.unjoinedTimestamp == null }
+                    Log.d("GroupMonitorService", "listenForCurrentUserGroupMemberships: Found ${activeMemberships.size} active memberships.")
 
                     var primaryActiveMember: GroupMembers? = null
-                    val currentUserProfile = runBlocking(Dispatchers.IO) { // Consider making this async
-                        firestoreService.getUserProfile(userId).getOrNull()
-                    }
-                    val selectedActiveGroupId = currentUserProfile?.selectedActiveGroupId
 
-                    if (selectedActiveGroupId != null) {
-                        primaryActiveMember = activeMemberships.find { it.groupId == selectedActiveGroupId }
+                    if (initialSelectedGroupId != null) {
+                        primaryActiveMember = activeMemberships.find { it.groupId == initialSelectedGroupId }
                         if (primaryActiveMember == null) {
-                            Log.d("GroupMonitorService", "Selected active group ($selectedActiveGroupId) not found or not active. Falling back to most recent active.")
+                            Log.d("GroupMonitorService", "Selected active group ($initialSelectedGroupId) not found or not active. Falling back to most recent active.")
                             monitorScope.launch {
                                 firestoreService.updateUserSelectedActiveGroup(userId, null)
                             }
@@ -347,19 +343,19 @@ class GroupMonitorService(
                         primaryActiveMember = activeMemberships.maxByOrNull { it.joinedTimestamp }
                     }
 
+
                     if (primaryActiveMember != null) {
                         Log.d("GroupMonitorService", "Active group member found: ${primaryActiveMember.userId} in group ${primaryActiveMember.groupId}")
                         _activeGroupMember.value = primaryActiveMember
-                        listenForActiveGroupDetails(primaryActiveMember.groupId) {
-                            _isInitialGroupMembershipLoaded.value = true // Data for primary member/group is loaded
-                        }
+                        _groupDetailsStatus.value = GroupDetailsStatus.LOADING // Set to loading while fetching details
+                        listenForActiveGroupDetails(primaryActiveMember.groupId)
                     } else {
                         Log.d("GroupMonitorService", "No active group memberships found for current user.")
                         _activeGroupMember.value = null
                         _activeGroup.value = null
                         _isInActiveGroup.value = false
                         stopOtherMembersListeners()
-                        _isInitialGroupMembershipLoaded.value = true // No active membership, so initial load is done
+                        _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
                     }
                 } else {
                     Log.d("GroupMonitorService", "No group memberships found for current user.")
@@ -367,25 +363,25 @@ class GroupMonitorService(
                     _activeGroup.value = null
                     _isInActiveGroup.value = false
                     stopOtherMembersListeners()
-                    _isInitialGroupMembershipLoaded.value = true // No memberships at all, initial load is done
+                    _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
                 }
             }
     }
 
     /**
      * Listens for details of the currently active group.
-     * @param groupId The ID of the active group.
-     * @param onInitialLoadComplete Optional callback for initial load completion.
      */
-    private fun listenForActiveGroupDetails(groupId: String, onInitialLoadComplete: (() -> Unit)? = null) {
+    private fun listenForActiveGroupDetails(groupId: String) {
         activeGroupDetailsListener?.remove()
 
+        Log.d("GroupMonitorService", "listenForActiveGroupDetails: Attaching listener for group $groupId.")
         activeGroupDetailsListener = db.collection("groups").document(groupId)
             .addSnapshotListener { snapshot, e ->
+                Log.d("GroupMonitorService", "listenForActiveGroupDetails: Snapshot received for group $groupId. Exists: ${snapshot?.exists()}, Error: ${e?.message}")
                 if (e != null) {
-                    Log.w("GroupMonitorService", "Listen for active group details failed.", e)
+                    Log.w("GroupMonitorService", "Listen for active group details failed for $groupId.", e)
                     _activeGroup.value = null
-                    onInitialLoadComplete?.invoke()
+                    _groupDetailsStatus.value = GroupDetailsStatus.ERROR
                     return@addSnapshotListener
                 }
 
@@ -394,36 +390,43 @@ class GroupMonitorService(
                     if (group != null) {
                         Log.d("GroupMonitorService", "Active group details updated: ${group.groupName}")
                         _activeGroup.value = group
+                        if (group.groupEndTimestamp?.let { it > System.currentTimeMillis() } ?: true) {
+                            _groupDetailsStatus.value = GroupDetailsStatus.ACTIVE
+                        } else {
+                            _groupDetailsStatus.value = GroupDetailsStatus.EXPIRED
+                        }
                     } else {
-                        Log.d("GroupMonitorService", "Active group data is null, or group no longer exists.")
+                        Log.d("GroupMonitorService", "Active group data for $groupId is null or malformed. Treating as NOT_FOUND.")
                         _activeGroup.value = null
+                        _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
                     }
                 } else {
-                    Log.d("GroupMonitorService", "Active group document no longer exists in Firestore for ID: $groupId. Triggering cleanup.")
+                    Log.d("GroupMonitorService", "Active group document $groupId no longer exists in Firestore. Triggering cleanup.")
                     _activeGroup.value = null
+                    _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
                 }
-                onInitialLoadComplete?.invoke()
             }
     }
 
     /**
      * Listens for other active members within the specified group.
-     * @param groupId The ID of the group.
-     * @param currentUserId The ID of the current user, to exclude them from the "other members" list.
      */
     private fun listenForOtherGroupMembers(groupId: String, currentUserId: String) {
         otherGroupMembersListener?.remove()
+        Log.d("GroupMonitorService", "listenForOtherGroupMembers: Attaching listener for group $groupId, excluding $currentUserId.")
 
         if (groupId.isEmpty()) {
             _otherGroupMembers.value = emptyList()
             stopOtherMembersLocationsListener()
             stopOtherMembersProfilesListeners()
+            Log.d("GroupMonitorService", "listenForOtherGroupMembers: Group ID is empty, skipping listener attachment.")
             return
         }
 
         otherGroupMembersListener = db.collection("groupMembers")
             .whereEqualTo("groupId", groupId)
             .addSnapshotListener { snapshots, e ->
+                Log.d("GroupMonitorService", "listenForOtherGroupMembers: Snapshot received. Error: ${e?.message}, Snapshots: ${snapshots?.size()}")
                 if (e != null) {
                     Log.w("GroupMonitorService", "Listen for other group members failed.", e)
                     _otherGroupMembers.value = emptyList()
@@ -452,24 +455,29 @@ class GroupMonitorService(
 
     /**
      * Listens for the current location of specified other members.
-     * @param userIds A list of user IDs whose locations to monitor.
      */
     private fun listenForOtherMembersLocations(userIds: List<String>) {
         otherMembersLocationsListener?.remove()
+        Log.d("GroupMonitorService", "listenForOtherMembersLocations: Attaching listener for ${userIds.size} user locations.")
 
         if (userIds.isEmpty()) {
             _otherMembersLocations.value = emptyList()
+            Log.d("GroupMonitorService", "listenForOtherMembersLocations: User IDs list is empty, skipping listener attachment.")
             return
         }
 
-        val distinctUserIds = userIds.distinct()
-        if (distinctUserIds.size > 10) {
-            Log.w("GroupMonitorService", "Too many users (${distinctUserIds.size}) for single 'whereIn' query. Limiting to first 10 for locations.")
+        val distinctUserIds = userIds.distinct().take(10)
+
+        if (distinctUserIds.isEmpty()) {
+            _otherMembersLocations.value = emptyList()
+            Log.d("GroupMonitorService", "listenForOtherMembersLocations: Distinct user IDs list is empty after take(10), skipping listener attachment.")
+            return
         }
 
         otherMembersLocationsListener = db.collection("current_user_locations")
-            .whereIn("userId", distinctUserIds.take(10))
+            .whereIn("userId", distinctUserIds)
             .addSnapshotListener { snapshots, e ->
+                Log.d("GroupMonitorService", "listenForOtherMembersLocations: Snapshot received. Error: ${e?.message}, Snapshots: ${snapshots?.size()}")
                 if (e != null) {
                     Log.w("GroupMonitorService", "Listen for other members' locations failed.", e)
                     _otherMembersLocations.value = emptyList()
@@ -488,21 +496,23 @@ class GroupMonitorService(
 
     /**
      * Listens for profile updates of specified other members.
-     * @param userIds A list of user IDs whose profiles to monitor.
      */
     private fun listenForOtherMembersProfiles(userIds: List<String>) {
         stopOtherMembersProfilesListeners()
+        Log.d("GroupMonitorService", "listenForOtherMembersProfiles: Attaching listeners for ${userIds.size} user profiles.")
 
         if (userIds.isEmpty()) {
             _otherMembersProfiles.value = emptyMap()
+            Log.d("GroupMonitorService", "listenForOtherMembersProfiles: User IDs list is empty, skipping listener attachment.")
             return
         }
 
         val newListeners = mutableMapOf<String, ListenerRegistration>()
 
-        userIds.forEach { userId ->
+        userIds.distinct().forEach { userId ->
             val listener = db.collection("users").document(userId)
                 .addSnapshotListener { snapshot, e ->
+                    Log.d("GroupMonitorService", "listenForOtherMembersProfiles: Snapshot received for $userId. Exists: ${snapshot?.exists()}, Error: ${e?.message}")
                     if (e != null) {
                         Log.w("GroupMonitorService", "Listen for profile $userId failed.", e)
                         _otherMembersProfiles.update { it.toMutableMap().apply { remove(userId) } }
@@ -524,27 +534,6 @@ class GroupMonitorService(
             newListeners[userId] = listener
         }
         otherMembersProfilesListeners = newListeners
-    }
-
-    /**
-     * Sends an Intent to LocationTrackingService to update its tracking state or to stop completely.
-     * @param interval The location update interval to use if tracking is enabled.
-     * @param isSharing True if location tracking should be active, false if it should be idle.
-     * @param stopServiceCompletely If true, sends ACTION_STOP_SERVICE; otherwise, sends ACTION_UPDATE_TRACKING_STATE.
-     */
-    private fun sendLocationTrackingUpdateIntent(interval: Long, isSharing: Boolean, stopServiceCompletely: Boolean) {
-        val intent = Intent(context, LocationTrackingService::class.java).apply {
-            action = if (stopServiceCompletely) LocationTrackingService.ACTION_STOP_SERVICE else LocationTrackingService.ACTION_UPDATE_TRACKING_STATE
-            putExtra(LocationTrackingService.EXTRA_LOCATION_INTERVAL, interval)
-            putExtra(LocationTrackingService.EXTRA_IS_SHARING_LOCATION, isSharing)
-        }
-        if (stopServiceCompletely) {
-            context.stopService(intent)
-            Log.d("GroupMonitorService", "Explicitly sending ACTION_STOP_SERVICE to LocationTrackingService.")
-        } else {
-            context.startService(intent)
-            Log.d("GroupMonitorService", "Sending ACTION_UPDATE_TRACKING_STATE to LocationTrackingService: isSharing=$isSharing, interval=$interval.")
-        }
     }
 
     /**

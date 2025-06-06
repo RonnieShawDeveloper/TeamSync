@@ -50,9 +50,10 @@ fun LoginScreen(navController: NavHostController) {
             override fun onAuthStateChanged(firebaseAuth: FirebaseAuth) {
                 val user = firebaseAuth.currentUser
                 if (user != null) {
-                    // User is logged in or session restored, navigate to main screen
-                    navController.navigate(NavRoutes.MAIN) {
-                        // Clear the back stack so the user can't go back to the login screen
+                    // User is logged in or session restored, navigate to PreCheckScreen
+                    // PreCheckScreen will handle permissions and then navigate to MainScreen
+                    navController.navigate(NavRoutes.PRE_CHECK) {
+                        // Clear the back stack up to the login screen, then inclusive means login is also popped
                         popUpTo(NavRoutes.LOGIN) { inclusive = true }
                     }
                 }
@@ -129,7 +130,7 @@ fun LoginScreen(navController: NavHostController) {
                         val result = authService.login(email.trim(), password.trim())
                         isLoading = false
                         result.onSuccess {
-                            // Navigation is now handled by the authStateListener
+                            // Navigation is now handled by the authStateListener, which will now go to PreCheckScreen
                         }.onFailure {
                             errorMessage = it.message
                         }

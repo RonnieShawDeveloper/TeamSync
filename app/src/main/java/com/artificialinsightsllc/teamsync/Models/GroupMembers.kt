@@ -30,8 +30,9 @@ data class GroupMembers(
     val lastKnownLocationLon: Double? = null, // Longitude of the member's last reported location
     val lastLocationUpdateTime: Long? = null, // Unix timestamp of the last location update
     val batteryLevel: Int? = null, // Last reported battery percentage (0-100), nullable if not available/enabled
-    // FIXED: Renamed to match Firestore's expected field names (without 'is' prefix)
+    val batteryChargingStatus: String? = null, // NEW FIELD: "CHARGING", "DISCHARGING", "FULL", "NOT_CHARGING", "UNKNOWN"
     val online: Boolean = true, // Renamed from isOnline
+    val appStatus: String? = null, // NEW FIELD: "FOREGROUND" or "BACKGROUND"
 
     // --- Personal Overrides for Group Settings ---
     val personalLocationUpdateIntervalMillis: Long? = null, // User's preferred location update interval

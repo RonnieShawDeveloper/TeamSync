@@ -355,16 +355,19 @@ class TeamListScreen(private val navController: NavHostController) {
             }
         }
 
-        // Placeholder Member Options Dialog (now using MarkerInfoDialog as a ModalBottomSheet)
+        // Member Options Dialog (now using MarkerInfoDialog as a ModalBottomSheet)
         if (showMemberOptionsDialog && selectedMemberForOptions != null) {
+            // FIX: Pass navController to MarkerInfoDialog
             MarkerInfoDialog(
+                navController = navController, // Pass the navController instance
                 profilePhotoUrl = selectedMemberForOptions!!.profilePhotoUrl,
                 title = selectedMemberForOptions!!.displayName,
-                latLng = selectedMemberForOptions!!.latLng, // Pass LatLng
+                latLng = selectedMemberForOptions!!.latLng,
                 timestamp = selectedMemberForOptions!!.lastUpdateTimestamp,
                 speed = selectedMemberForOptions!!.speed,
                 bearing = selectedMemberForOptions!!.bearing,
-                onDismissRequest = { showMemberOptionsDialog = false }
+                onDismissRequest = { showMemberOptionsDialog = false },
+                personUserId = selectedMemberForOptions!!.userId // Ensure userId is passed
             )
         }
 

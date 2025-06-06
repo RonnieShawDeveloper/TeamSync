@@ -17,6 +17,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.artificialinsightsllc.teamsync.Helpers.BatteryInfoHelper
 import com.artificialinsightsllc.teamsync.MainActivity
 import com.artificialinsightsllc.teamsync.Models.Locations
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -32,6 +33,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import com.artificialinsightsllc.teamsync.R
+import com.artificialinsightsllc.teamsync.TeamSyncApplication
 
 class LocationTrackingService : Service() {
 
@@ -41,18 +43,17 @@ class LocationTrackingService : Service() {
     private val firestoreService = FirestoreService()
     private val auth = FirebaseAuth.getInstance()
 
-    // Flag to keep track of whether location updates are currently requested
-    private var isUpdatingLocation: Boolean = false
+    private var activeGroupMemberId: String? = null
 
     companion object {
         const val CHANNEL_ID = "TeamSyncLocationChannel"
         const val NOTIFICATION_ID = 12345
         const val ACTION_START_SERVICE = "ACTION_START_SERVICE"
         const val ACTION_STOP_SERVICE = "ACTION_STOP_SERVICE"
-        // New action to update tracking state without necessarily starting/stopping the service itself
         const val ACTION_UPDATE_TRACKING_STATE = "ACTION_UPDATE_TRACKING_STATE"
         const val EXTRA_LOCATION_INTERVAL = "extra_location_interval"
-        const val EXTRA_IS_SHARING_LOCATION = "extra_is_sharing_location" // True to start tracking, false to stop
+        const val EXTRA_IS_SHARING_LOCATION = "extra_is_sharing_location"
+        const val EXTRA_ACTIVE_GROUP_MEMBER_ID = "extra_active_group_member_id"
     }
 
     override fun onCreate() {
@@ -65,20 +66,16 @@ class LocationTrackingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("LocationService", "Service onStartCommand: STARTING. Action: ${intent?.action}")
 
-        // This block ensures the service immediately goes into the foreground state
-        // regardless of location tracking status. This is CRITICAL for preventing
-        // ForegroundServiceDidNotStartInTimeException.
+        // Ensure service runs in foreground (required for location tracking)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Check for POST_NOTIFICATIONS permission on Android 13+ before calling startForeground
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
                 Log.e("LocationService", "POST_NOTIFICATIONS permission not granted. Cannot start foreground service (notification requirement).")
-                stopSelf() // Cannot be foreground without notification, so stop
+                stopSelf()
                 return START_NOT_STICKY
             }
         }
-
         try {
             createNotificationChannel()
             val notification = buildNotification()
@@ -86,7 +83,7 @@ class LocationTrackingService : Service() {
             Log.d("LocationService", "Called startForeground successfully.")
         } catch (e: Exception) {
             Log.e("LocationService", "CRITICAL ERROR: Failed to call startForeground: ${e.message}", e)
-            stopSelf() // Stop service immediately if it cannot enter foreground state
+            stopSelf()
             return START_NOT_STICKY
         }
 
@@ -94,58 +91,41 @@ class LocationTrackingService : Service() {
         // Handle different actions from intents
         when (intent?.action) {
             ACTION_START_SERVICE, ACTION_UPDATE_TRACKING_STATE -> {
-                val locationInterval = intent.getLongExtra(EXTRA_LOCATION_INTERVAL, 300000L) // Default 5 min
-                val isSharingLocation = intent.getBooleanExtra(EXTRA_IS_SHARING_LOCATION, true) // Default true
+                val locationInterval = intent.getLongExtra(EXTRA_LOCATION_INTERVAL, 300000L)
+                val isSharingLocation = intent.getBooleanExtra(EXTRA_IS_SHARING_LOCATION, true)
+                activeGroupMemberId = intent.getStringExtra(EXTRA_ACTIVE_GROUP_MEMBER_ID)
 
-                Log.d("LocationService", "Handling action: ${intent?.action}. Sharing: $isSharingLocation, Interval: $locationInterval.")
+                Log.d("LocationService", "onStartCommand received activeGroupMemberId: $activeGroupMemberId")
+                Log.d("LocationService", "Handling action: ${intent?.action}. Sharing: $isSharingLocation, Interval: $locationInterval. Member ID: $activeGroupMemberId")
 
-                if (isSharingLocation) {
-                    // Start or update location tracking if permissions are granted
-                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                        if (!isUpdatingLocation) { // Only call startLocationUpdates if not already updating
-                            startLocationUpdates(locationInterval)
-                            isUpdatingLocation = true
-                            Log.d("LocationService", "Started location updates.")
-                        } else {
-                            // If already updating, but interval changed, update the request
-                            // (requires removing and re-adding updates, or recreating LocationRequest)
-                            stopLocationUpdates() // Stop existing updates
-                            startLocationUpdates(locationInterval) // Start with new interval
-                            Log.d("LocationService", "Updated location updates interval.")
-                        }
-                    } else {
-                        Log.e("LocationService", "Location permission not granted. Cannot start/continue location updates.")
-                        stopLocationUpdates() // Stop updates if permissions are suddenly revoked or not present
-                        isUpdatingLocation = false
-                        // Do not stopSelf here. The service should remain foreground, but not track.
-                    }
+                if (isSharingLocation && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && activeGroupMemberId != null) {
+                    startLocationUpdates(locationInterval)
+                    Log.d("LocationService", "Location updates STARTED based on intent.")
                 } else {
-                    // Stop location updates if sharing is disabled, but keep service foreground
-                    Log.d("LocationService", "Location sharing disabled, stopping updates.")
                     stopLocationUpdates()
-                    isUpdatingLocation = false
+                    Log.d("LocationService", "Location updates STOPPED based on intent (sharing=$isSharingLocation, memberIdIsNull=${activeGroupMemberId == null}).")
                 }
             }
             ACTION_STOP_SERVICE -> {
                 Log.d("LocationService", "Handling ACTION_STOP_SERVICE. Stopping service completely.")
                 stopLocationUpdates()
-                isUpdatingLocation = false
-                stopSelf() // Completely stop the service
+                activeGroupMemberId = null
+                stopSelf()
             }
         }
-        return START_STICKY // Service will be recreated if killed, but onStartCommand receives null intent
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        return null // Not a bound service
+        return null
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.d("LocationService", "Service onDestroy")
-        stopLocationUpdates() // Ensure updates are stopped
-        serviceScope.cancel() // Cancel all coroutines launched in this scope
-        isUpdatingLocation = false
+        stopLocationUpdates()
+        serviceScope.cancel()
+        activeGroupMemberId = null
     }
 
     private fun createNotificationChannel() {
@@ -172,12 +152,12 @@ class LocationTrackingService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("TeamSync is running in the background") // Generic title
-            .setContentText("Tap to open. Your location is being managed based on group settings.") // More descriptive text
+            .setContentTitle("TeamSync is running in the background")
+            .setContentText("Tap to open. Your location is being managed based on group settings.")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true) // Makes the notification non-dismissible by user
+            .setOngoing(true)
     }
 
     private fun setupLocationCallback() {
@@ -185,47 +165,56 @@ class LocationTrackingService : Service() {
             override fun onLocationResult(locationResult: LocationResult) {
                 locationResult.lastLocation?.let { location ->
                     Log.d("LocationService", "Location received: ${location.latitude}, ${location.longitude}")
-                    // Only send to Firestore if currently active (isUpdatingLocation flag) and user is authenticated
-                    if (isUpdatingLocation && auth.currentUser != null) {
-                        sendLocationToFirestore(location)
+
+                    if (auth.currentUser != null && activeGroupMemberId != null) {
+                        sendLocationAndStatusToFirestore(location, activeGroupMemberId!!)
                     } else {
-                        Log.d("LocationService", "Location received, but not sending to Firestore (not updating or user logged out).")
+                        Log.d("LocationService", "Location received, but not sending to Firestore (userLogged=${auth.currentUser?.uid != null}, memberIdIsNull=${activeGroupMemberId == null}).")
                     }
                 }
             }
         }
     }
 
-    @SuppressLint("MissingPermission") // Permissions are handled in MainScreen before starting service, and checked in onStartCommand
+    @SuppressLint("MissingPermission") // Permissions are handled in PreCheckScreen and checked in onStartCommand
     private fun startLocationUpdates(interval: Long) {
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
-            .setMinUpdateIntervalMillis(interval / 2) // Update at least half the interval
+            // FIX: Changed setMinUpdateIntervalMillis to match the desired interval
+            .setMinUpdateIntervalMillis(interval)
             .build()
 
         try {
             fusedLocationClient.requestLocationUpdates(
                 locationRequest,
                 locationCallback,
-                Looper.getMainLooper() // Use main looper for callbacks
+                Looper.getMainLooper()
             )
             Log.d("LocationService", "Requested FusedLocationProviderClient updates with interval: $interval ms")
         } catch (e: SecurityException) {
             Log.e("LocationService", "Location permission denied when starting updates: ${e.message}")
-            isUpdatingLocation = false // Ensure flag is false if this fails
         }
     }
 
     private fun stopLocationUpdates() {
-        if (::fusedLocationClient.isInitialized && isUpdatingLocation) { // Only try to remove if initialized AND currently updating
+        if (::fusedLocationClient.isInitialized) {
             fusedLocationClient.removeLocationUpdates(locationCallback)
             Log.d("LocationService", "Stopped FusedLocationProviderClient updates.")
-            isUpdatingLocation = false
         }
     }
 
-    private fun sendLocationToFirestore(location: Location) {
+    /**
+     * Sends location, battery status, and app status to Firestore.
+     * This is the authoritative update point for the user's current status.
+     */
+    private fun sendLocationAndStatusToFirestore(location: Location, memberId: String) {
         val userId = auth.currentUser?.uid
         if (userId != null) {
+            val (batteryLevel, chargingStatus) = BatteryInfoHelper.getBatteryInfo(this)
+
+            val appStatus = (application as TeamSyncApplication).isAppInForeground.let {
+                if (it) "FOREGROUND" else "BACKGROUND"
+            }
+
             val locationData = Locations(
                 userId = userId,
                 latitude = location.latitude,
@@ -235,7 +224,7 @@ class LocationTrackingService : Service() {
                 bearing = if (location.hasBearing()) location.bearing else null
             )
             serviceScope.launch {
-                // Save to history
+                // 1. Save to history
                 val historyResult = firestoreService.addLocationLog(locationData)
                 if (historyResult.isSuccess) {
                     // Log.d("LocationService", "Location history saved for user $userId. Doc ID: ${historyResult.getOrNull()}")
@@ -243,12 +232,28 @@ class LocationTrackingService : Service() {
                     Log.e("LocationService", "Failed to save location history for user $userId: ${historyResult.exceptionOrNull()?.message}")
                 }
 
-                // Save to current location (overwrites previous)
+                // 2. Save to current_user_locations (overwrites previous)
                 val currentResult = firestoreService.saveCurrentLocation(locationData)
                 if (currentResult.isSuccess) {
-                    // Log.d("LocationService", "Current location updated for user $userId.")
+                    Log.d("LocationService", "Current location updated for user $userId.")
                 } else {
                     Log.e("LocationService", "Failed to update current location for user $userId: ${currentResult.exceptionOrNull()?.message}")
+                }
+
+                // 3. Update GroupMembers record with location, battery, and app status
+                val memberUpdateResult = firestoreService.updateGroupMemberStatus(
+                    memberId = memberId,
+                    newLat = location.latitude,
+                    newLon = location.longitude,
+                    newUpdateTime = System.currentTimeMillis(),
+                    newBatteryLevel = batteryLevel,
+                    newBatteryChargingStatus = chargingStatus,
+                    newAppStatus = appStatus
+                )
+                if (memberUpdateResult.isSuccess) {
+                    Log.d("LocationService", "Group member status updated successfully for member $memberId (Lat: ${location.latitude}, Lon: ${location.longitude}, Battery: $batteryLevel%, AppStatus: $appStatus)")
+                } else {
+                    Log.e("LocationService", "Failed to update group member status for member $memberId: ${memberUpdateResult.exceptionOrNull()?.message}")
                 }
             }
         } else {

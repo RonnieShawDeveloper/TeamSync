@@ -115,7 +115,7 @@ import java.io.IOException
 import java.util.Locale
 import com.artificialinsightsllc.teamsync.Services.MarkerMonitorService
 
-class MainScreen(private val navController: NavHostController) {
+class MainScreen(private val navController: NavHostController) { // navController is passed here
 
     data class MarkerDisplayInfo(
         val title: String,
@@ -124,7 +124,8 @@ class MainScreen(private val navController: NavHostController) {
         val bearing: Float?,
         val profilePhotoUrl: String?,
         val latLng: LatLng?,
-        val mapMarker: MapMarker? = null
+        val mapMarker: MapMarker? = null,
+        val userId: String? = null // NEW: Added userId to MarkerDisplayInfo
     )
 
     @SuppressLint("MissingPermission")
@@ -136,8 +137,9 @@ class MainScreen(private val navController: NavHostController) {
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
 
-        val groupMonitorService = (context.applicationContext as TeamSyncApplication).groupMonitorService
-        val markerMonitorService = (context.applicationContext as TeamSyncApplication).markerMonitorService
+        val teamSyncApplication = context.applicationContext as TeamSyncApplication
+        val groupMonitorService = teamSyncApplication.groupMonitorService
+        val markerMonitorService = teamSyncApplication.markerMonitorService
         val firestoreService = remember { FirestoreService() }
         val coroutineScope = rememberCoroutineScope()
 
@@ -197,10 +199,9 @@ class MainScreen(private val navController: NavHostController) {
         }
 
 
-        // Helper function for starting LocationTrackingService (now only calls startService to put it foreground)
         fun startAppTrackingService() {
             val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
-                action = LocationTrackingService.ACTION_START_SERVICE // This action triggers startForeground in service
+                action = LocationTrackingService.ACTION_START_SERVICE
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
@@ -216,7 +217,6 @@ class MainScreen(private val navController: NavHostController) {
             }
         }
 
-        // Helper function for stopping LocationTrackingService (full stop, only on app termination/logout)
         fun stopAppTrackingService() {
             val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
                 action = LocationTrackingService.ACTION_STOP_SERVICE
@@ -225,7 +225,6 @@ class MainScreen(private val navController: NavHostController) {
             Log.d("MainScreen", "Requested stop of LocationTrackingService.")
         }
 
-        // Helper function for starting local GPS location updates (for map dot)
         @SuppressLint("MissingPermission")
         fun startLocationUpdates(
             fusedLocationClient: FusedLocationProviderClient,
@@ -248,7 +247,6 @@ class MainScreen(private val navController: NavHostController) {
             }
         }
 
-        // Helper function for stopping local GPS location updates (for map dot)
         fun stopLocationUpdates(
             fusedLocationClient: FusedLocationProviderClient,
             locationCallback: LocationCallback
@@ -263,35 +261,12 @@ class MainScreen(private val navController: NavHostController) {
                     locationResult.lastLocation?.let { location ->
                         userLocation = location
                         Log.d("MainScreen", "Local GPS Location received: ${location.latitude}, ${location.longitude}")
-
-                        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
-                        val isSharingGloballyEnabledFromMonitor = groupMonitorService.isLocationSharingGloballyEnabled.value
-                        val isInGroupFromMonitor = groupMonitorService.isInActiveGroup.value
-
-                        // Only send to Firestore if relevant conditions are met (user logged in, in group, sharing enabled, and is from GroupMonitorService's tracking state)
-                        if (currentUserId != null && isInGroupFromMonitor && isSharingGloballyEnabledFromMonitor) {
-                            coroutineScope.launch {
-                                val locationData = Locations(
-                                    userId = currentUserId,
-                                    latitude = location.latitude,
-                                    longitude = location.longitude,
-                                    timestamp = System.currentTimeMillis(),
-                                    speed = if (location.hasSpeed()) location.speed else null,
-                                    bearing = if (location.hasBearing()) location.bearing else null
-                                )
-                                firestoreService.addLocationLog(locationData)
-                                firestoreService.saveCurrentLocation(locationData)
-                                Log.d("MainScreen", "Location sent to Firestore for user $currentUserId.")
-                            }
-                        } else {
-                            Log.d("MainScreen", "Location received, but not sending to Firestore (not updating or user logged out/not in group).")
-                        }
+                        Log.d("MainScreen", "MainScreen local location received, but not sending to Firestore. LocationTrackingService is responsible for persistence.")
                     }
                 }
             }
         }
 
-        // Multiple Permissions Launcher
         val multiplePermissionsLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestMultiplePermissions()
         ) { permissions ->
@@ -304,13 +279,11 @@ class MainScreen(private val navController: NavHostController) {
 
             if (allPermissionsGranted && hasNotificationPermission) {
                 Log.d("MainScreen", "All required permissions granted via launcher. Attempting to start Foreground Service.")
-                startAppTrackingService() // Start the foreground service immediately after permissions
+                startAppTrackingService()
             } else {
                 Log.w("MainScreen", "Not all required permissions granted via launcher. Foreground Service will not start or will stop.")
-                stopAppTrackingService() // Explicitly stop if permissions are not granted (e.g. user denied)
+                stopAppTrackingService()
             }
-            // Signal GroupMonitorService about the new permission status.
-            // This will trigger GroupMonitorService to send ACTION_UPDATE_TRACKING_STATE.
             groupMonitorService.setUiPermissionsGranted(allPermissionsGranted && hasNotificationPermission)
         }
 
@@ -320,7 +293,6 @@ class MainScreen(private val navController: NavHostController) {
 
         // --- LaunchedEffects for initial setup and state observation ---
 
-        // 1. Initial Data Loading, Permission Check, and FOREGROUND SERVICE STARTUP
         LaunchedEffect(Unit) {
             val auth = FirebaseAuth.getInstance()
             val firestore = FirebaseFirestore.getInstance()
@@ -344,7 +316,6 @@ class MainScreen(private val navController: NavHostController) {
                 Log.d("MainScreen", "No authenticated user found. Consider navigating to LoginScreen.")
             }
 
-            // Determine initial permission status
             val currentAllPermissionsGranted = allPermissionsNeeded.all {
                 ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
             }
@@ -357,28 +328,30 @@ class MainScreen(private val navController: NavHostController) {
             allPermissionsGranted = currentAllPermissionsGranted
             hasNotificationPermission = currentHasNotificationPermission
 
-            // Prompt for permissions if any are missing, otherwise start FGS
             if (!(currentAllPermissionsGranted && currentHasNotificationPermission)) {
                 showPermissionRationaleDialog = true
             } else {
-                // If all permissions are already granted on app launch, immediately start the foreground service.
                 Log.d("MainScreen", "All permissions initially granted on app launch. Attempting to start Foreground Service immediately.")
-                startAppTrackingService() // Ensure FGS starts and stays foreground
+                startAppTrackingService()
             }
 
-            // Always start GroupMonitorService and inform it about the current permission status.
-            // GroupMonitorService will then decide whether to actively track location based on its combine flow.
             val initialSelectedGroupId = currentUserModel?.selectedActiveGroupId
             groupMonitorService.startMonitoring(initialSelectedGroupId)
             groupMonitorService.setUiPermissionsGranted(allPermissionsGranted && hasNotificationPermission)
         }
 
-        // 2. Local GPS updates for map dot (always runs when MainScreen is active and permissions granted)
         DisposableEffect(lifecycleOwner, fusedLocationClient, allPermissionsGranted, effectiveLocationUpdateInterval) {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_START) {
-                    if (allPermissionsGranted) { // Only start local GPS if all permissions are good
+                    val fineLocationGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    val coarseLocationGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    val allLocationPermissionsGrantedForUI = (fineLocationGranted || coarseLocationGranted)
+
+                    if (allLocationPermissionsGrantedForUI) {
                         startLocationUpdates(fusedLocationClient, locationCallback, effectiveLocationUpdateInterval)
+                    } else {
+                        Log.w("MainScreen", "Not all required location permissions are granted on ON_START. Local GPS updates for map dot will not start.")
+                        Toast.makeText(context, "Location permission missing. Map features may be limited.", Toast.LENGTH_LONG).show()
                     }
                 } else if (event == Lifecycle.Event.ON_STOP) {
                     stopLocationUpdates(fusedLocationClient, locationCallback)
@@ -389,29 +362,18 @@ class MainScreen(private val navController: NavHostController) {
                 lifecycleOwner.lifecycle.removeObserver(observer)
                 fusedLocationClient.removeLocationUpdates(locationCallback)
                 Log.d("MainScreen", "Stopped local GPS location updates on dispose.")
-                // IMPORTANT: Do NOT call stopAppTrackingService() here.
-                // The Foreground Service should only stop on explicit logout/app termination.
             }
         }
 
-        // 3. Trigger Rationale Dialog if permissions are missing (and user is active)
         LaunchedEffect(isInGroup, allPermissionsGranted, hasNotificationPermission) {
-            // Show rationale if permissions are genuinely missing AND if not already showing.
-            // This ensures it pops up if user explicitly denies and tries to use a feature requiring it later.
             if (!(allPermissionsGranted && hasNotificationPermission) && !showPermissionRationaleDialog) {
-                // This condition is now just to trigger the dialog if somehow it wasn't shown initially
-                // or if permissions were revoked later.
-                // The primary permission check is in LaunchedEffect(Unit).
-                // Avoid using isInGroup here to prevent flicker on group state changes.
                 Log.d("MainScreen", "Permissions changed or missing, triggering rationale check.")
                 showPermissionRationaleDialog = true
             } else if (showPermissionRationaleDialog && (allPermissionsGranted && hasNotificationPermission)) {
-                // Dismiss dialog if permissions are now granted
                 showPermissionRationaleDialog = false
             }
         }
 
-        // 4. Center Map on User Location
         LaunchedEffect(userLocation, mapLockedToUserLocation) {
             userLocation?.let { loc ->
                 val newLatLng = LatLng(loc.latitude, loc.longitude)
@@ -428,7 +390,6 @@ class MainScreen(private val navController: NavHostController) {
             }
         }
 
-        // 5. Snackbar and Expired Group Dialog
         LaunchedEffect(userMessage) {
             userMessage?.let { message ->
                 if (message.contains("has expired. You have been automatically removed.")) {
@@ -493,7 +454,8 @@ class MainScreen(private val navController: NavHostController) {
                                         speed = if (loc.hasSpeed()) loc.speed else null,
                                         bearing = if (loc.hasBearing()) loc.bearing else null,
                                         profilePhotoUrl = userProfilePicUrl,
-                                        latLng = userLatLng
+                                        latLng = userLatLng,
+                                        userId = FirebaseAuth.getInstance().currentUser?.uid // Pass current user's ID
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -510,7 +472,8 @@ class MainScreen(private val navController: NavHostController) {
                                         speed = if (loc.hasSpeed()) loc.speed else null,
                                         bearing = if (loc.hasBearing()) loc.bearing else null,
                                         profilePhotoUrl = userProfilePicUrl,
-                                        latLng = userLatLng
+                                        latLng = userLatLng,
+                                        userId = FirebaseAuth.getInstance().currentUser?.uid // Pass current user's ID
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -552,7 +515,8 @@ class MainScreen(private val navController: NavHostController) {
                                                     speed = otherLoc.speed,
                                                     bearing = otherLoc.bearing,
                                                     profilePhotoUrl = otherProfilePicUrl,
-                                                    latLng = otherMemberLatLng
+                                                    latLng = otherMemberLatLng,
+                                                    userId = otherLoc.userId // Pass the other member's userId
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -569,7 +533,8 @@ class MainScreen(private val navController: NavHostController) {
                                                     speed = otherLoc.speed,
                                                     bearing = otherLoc.bearing,
                                                     profilePhotoUrl = otherProfilePicUrl,
-                                                    latLng = otherMemberLatLng
+                                                    latLng = otherMemberLatLng,
+                                                    userId = otherLoc.userId // Pass the other member's userId
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -607,7 +572,8 @@ class MainScreen(private val navController: NavHostController) {
                                             bearing = mapMarker.cameraBearing,
                                             profilePhotoUrl = mapMarker.photoUrl,
                                             latLng = markerLatLng,
-                                            mapMarker = mapMarker
+                                            mapMarker = mapMarker,
+                                            userId = null // Map markers don't have a direct userId for the report
                                         )
                                         showCustomMarkerInfoDialog = true
                                         true
@@ -775,39 +741,22 @@ class MainScreen(private val navController: NavHostController) {
                     ) { Icon(Icons.Filled.Groups, "Groups List") }
                 }
 
-                if (showPermissionRationaleDialog) {
-                    PermissionRationaleDialog(
-                        onConfirm = {
-                            showPermissionRationaleDialog = false
-                            multiplePermissionsLauncher.launch(allPermissionsNeeded)
-                        },
-                        onDismiss = {
-                            showPermissionRationaleDialog = false
-                            Log.d("MainScreen", "User dismissed permissions rationale.")
-                            allPermissionsGranted = false
-                            hasNotificationPermission = false
-                            groupMonitorService.setUiPermissionsGranted(false)
-                            stopLocationUpdates(fusedLocationClient, locationCallback)
-                            stopAppTrackingService() // Only stop FGS if permissions are explicitly denied and it was already running
-                            coroutineScope.launch {
-                                groupMonitorService.updatePersonalLocationSharing(false)
-                            }
-                        }
-                    )
-                }
 
                 if (showCustomMarkerInfoDialog && currentMarkerInfo != null) {
                     if (currentMarkerInfo!!.mapMarker == null) {
                         MarkerInfoDialog(
+                            navController = navController, // NEW: Pass navController here
                             profilePhotoUrl = currentMarkerInfo!!.profilePhotoUrl,
                             title = currentMarkerInfo!!.title,
                             latLng = currentMarkerInfo!!.latLng,
                             timestamp = currentMarkerInfo!!.timestamp,
                             speed = currentMarkerInfo!!.speed,
                             bearing = currentMarkerInfo!!.bearing,
-                            onDismissRequest = { showCustomMarkerInfoDialog = false }
+                            onDismissRequest = { showCustomMarkerInfoDialog = false },
+                            personUserId = currentMarkerInfo!!.userId // Pass userId here
                         )
                     } else {
+                        // MapMarkerInfoDialog does not need navController or userId currently
                         MapMarkerInfoDialog(
                             mapMarker = currentMarkerInfo!!.mapMarker!!,
                             onDismissRequest = { showCustomMarkerInfoDialog = false }
@@ -866,46 +815,5 @@ class MainScreen(private val navController: NavHostController) {
     ) {
         fusedLocationClient.removeLocationUpdates(locationCallback)
         Log.d("MainScreen", "Stopped local GPS location updates.")
-    }
-
-    @Composable
-    fun PermissionRationaleDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text("Permissions Required for TeamSync") },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        text = "TeamSync needs the following permissions to provide its full functionality:\n\n" +
-                                "• Location (Precise & Approximate): Essential for showing your " +
-                                "position and your group members' positions on the map, " +
-                                "enabling features like finding friends, and geotagging photos. " +
-                                "Precise location ensures accurate tracking. This permission is crucial for the app's core functionality.\n\n" +
-                                "• Camera: Required if you want to take photos directly within " +
-                                "the app to share with your group, especially geotagged ones " +
-                                "that appear on the map.\n\n" +
-                                "• Photos/Media: Needed to allow you to select and upload " +
-                                "existing images from your device's gallery to share with your group.\n\n" +
-                                "• Notifications: Required on Android 13 (API 33) and higher to send you important updates " +
-                                "and alerts, such as when a group member sends you a message or a critical location event occurs. " +
-                                "This ensures you receive timely information about your group's activities.\n\n" +
-                                "• Internet: Necessary for all communication, map loading, and " +
-                                "location updates over the network.\n\n" +
-                                "You can manage these permissions at any time in your device's app settings.",
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = onConfirm) {
-                    Text("Continue")
-                }
-            },
-            dismissButton = {
-                Button(onClick = onDismiss) {
-                    Text("Not Now")
-                }
-            }
-        )
     }
 }

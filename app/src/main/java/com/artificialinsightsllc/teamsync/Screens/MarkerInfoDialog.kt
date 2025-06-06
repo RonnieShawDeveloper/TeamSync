@@ -3,6 +3,7 @@ package com.artificialinsightsllc.teamsync.Screens
 
 import android.content.Context
 import android.location.Geocoder
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,12 +17,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,7 +55,6 @@ import coil.compose.rememberAsyncImagePainter
 import com.artificialinsightsllc.teamsync.Helpers.TimeFormatter
 import com.artificialinsightsllc.teamsync.Helpers.UnitConverter
 import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
-import com.artificialinsightsllc.teamsync.ui.theme.LightCream
 import com.artificialinsightsllc.teamsync.R
 import com.google.android.gms.maps.model.LatLng
 import kotlinx.coroutines.Dispatchers
@@ -62,27 +64,32 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.util.Locale
+import com.artificialinsightsllc.teamsync.Navigation.NavRoutes
+import androidx.navigation.NavHostController // NEW IMPORT for NavHostController
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MarkerInfoDialog(
+    navController: NavHostController, // NEW: Added navController parameter
     profilePhotoUrl: String?,
     title: String,
-    latLng: LatLng?, // New: Pass LatLng for geocoding
+    latLng: LatLng?,
     timestamp: Long,
     speed: Float?,
     bearing: Float?,
-    onDismissRequest: () -> Unit
+    onDismissRequest: () -> Unit,
+    personUserId: String? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var timeAgoString by remember { mutableStateOf("") }
-    var currentAddress by remember { mutableStateOf<String?>(null) } // State for geocoded address
+    var currentAddress by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // LaunchedEffect to update the timeAgoString and perform geocoding
+    val DarkBlue = Color(0xFF0D47A1)
+
+
     LaunchedEffect(timestamp, latLng) {
-        // Update timeAgoString every second
         launch {
             while (true) {
                 timeAgoString = TimeFormatter.getRelativeTimeSpanString(timestamp).toString()
@@ -90,7 +97,6 @@ fun MarkerInfoDialog(
             }
         }
 
-        // Perform geocoding when latLng changes
         if (latLng != null) {
             currentAddress = geocodeLocation(context, latLng.latitude, latLng.longitude)
         } else {
@@ -99,33 +105,31 @@ fun MarkerInfoDialog(
     }
 
     LaunchedEffect(Unit) {
-        sheetState.show() // Automatically show the bottom sheet when composed
+        sheetState.show()
     }
 
     ModalBottomSheet(
         onDismissRequest = {
-            onDismissRequest() // Call the dismiss callback when the sheet is dismissed
+            onDismissRequest()
         },
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-        // Apply the background image to the container
-        containerColor = Color.Transparent, // Make container transparent to show the image
+        containerColor = Color.Transparent,
         modifier = Modifier.fillMaxWidth()
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth() // Fill the width of the modal area
-                .wrapContentHeight() // Make height wrap content
-                .background(Color.Transparent) // Ensure Box itself is transparent
+                .fillMaxWidth()
+                .wrapContentHeight()
+                .background(Color.Transparent)
         ) {
-            // Background Image for the ModalBottomSheet
             Image(
                 painter = painterResource(id = R.drawable.background1),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .matchParentSize() // Fill the size of the parent Box
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)) // Clip to match sheet corners
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             )
 
             Column(
@@ -133,7 +137,7 @@ fun MarkerInfoDialog(
                     .padding(20.dp)
                     .fillMaxWidth()
                     .wrapContentHeight()
-                    .padding(bottom = 8.dp), // Added 8.dp bottom padding
+                    .padding(bottom = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -141,13 +145,13 @@ fun MarkerInfoDialog(
                 Image(
                     painter = rememberAsyncImagePainter(
                         model = profilePhotoUrl,
-                        error = painterResource(id = R.drawable.default_profile_pic) // Fallback image
+                        error = painterResource(id = R.drawable.default_profile_pic)
                     ),
                     contentDescription = "Profile Picture",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .size(150.dp)
-                        .shadow(12.dp, CircleShape, clip = false) // Added shadow modifier
+                        .shadow(12.dp, CircleShape, clip = false)
                         .clip(CircleShape)
                         .background(Color.LightGray)
                 )
@@ -172,7 +176,7 @@ fun MarkerInfoDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 } ?: Text(
-                    text = "Address: Looking up...", // Show a loading message for address
+                    text = "Address: Looking up...",
                     fontSize = 14.sp,
                     color = DarkBlue.copy(alpha = 0.6f),
                     textAlign = TextAlign.Center,
@@ -212,7 +216,6 @@ fun MarkerInfoDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                // Row for the two action buttons at the bottom
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -220,15 +223,16 @@ fun MarkerInfoDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Private Chat Button (Bottom Left)
+                    // Private Chat Button
                     Button(
                         onClick = {
                             Toast.makeText(context, "Private Chat functionality coming soon!", Toast.LENGTH_SHORT).show()
-                            // TODO: Navigate to private chat screen
                         },
                         modifier = Modifier
-                            .size(80.dp) // Increased button size
-                            .shadow(8.dp, CircleShape, clip = false),
+                            .weight(1f)
+                            .height(80.dp)
+                            .shadow(8.dp, CircleShape, clip = false)
+                            .padding(horizontal = 4.dp),
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = DarkBlue)
                     ) {
@@ -236,54 +240,94 @@ fun MarkerInfoDialog(
                             imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "Private Chat",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp) // Icon size adjusted
+                            modifier = Modifier.size(40.dp)
                         )
                     }
 
-                    // Close Button (Bottom Right)
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // View Travel Report Button
+                    Button(
+                        onClick = {
+                            coroutineScope.launch { sheetState.hide() }.invokeOnCompletion {
+                                onDismissRequest() // Dismiss the dialog immediately after hiding
+                                if (personUserId != null) {
+                                    Log.d("MarkerInfoDialog", "Navigating to travel report for userId: $personUserId")
+                                    // Navigate using the passed navController
+                                    navController.navigate(NavRoutes.TRAVEL_REPORT.replace("{userId}", personUserId))
+                                } else {
+                                    Toast.makeText(context, "Cannot view report: User ID not available.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        enabled = personUserId != null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(80.dp)
+                            .shadow(8.dp, CircleShape, clip = false)
+                            .padding(horizontal = 4.dp),
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ListAlt,
+                            contentDescription = "View Report",
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Close Button
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                sheetState.hide() // Hide the sheet with animation
+                                sheetState.hide()
                             }.invokeOnCompletion {
-                                onDismissRequest() // Call dismiss callback after animation
+                                onDismissRequest()
                             }
                         },
                         modifier = Modifier
-                            .size(80.dp) // Increased button size
-                            .shadow(8.dp, CircleShape, clip = false),
+                            .weight(1f)
+                            .height(80.dp)
+                            .shadow(8.dp, CircleShape, clip = false)
+                            .padding(horizontal = 4.dp),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000)) // Deep red/maroon
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000))
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Close",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp) // Icon size adjusted
+                            modifier = Modifier.size(40.dp)
                         )
                     }
                 }
-                // Removed the final Spacer(Modifier.height(8.dp)) here as padding is applied to column
             }
         }
     }
 }
 
-// Helper function for geocoding a location to an address string
 private suspend fun geocodeLocation(context: Context, latitude: Double, longitude: Double): String {
-    return withContext(Dispatchers.IO) { // Perform network/IO operation on Dispatchers.IO
+    return withContext(Dispatchers.IO) {
         val geocoder = Geocoder(context, Locale.getDefault())
         try {
+            if (!Geocoder.isPresent()) {
+                Log.e("Geocoding", "Geocoder is not present on this device.")
+                return@withContext "Address lookup failed (Geocoder not available)"
+            }
             val addresses = geocoder.getFromLocation(latitude, longitude, 1)
             addresses?.firstOrNull()?.getAddressLine(0) ?: "Address not found"
         } catch (e: IOException) {
-            // Log the error for debugging
-            println("Geocoding failed for $latitude, $longitude: ${e.message}")
-            "Address lookup failed" // Message for network/IO errors
+            Log.e("Geocoding", "Geocoding failed for $latitude, $longitude: ${e.message}")
+            "Address lookup failed (Network/IO error)"
         } catch (e: IllegalArgumentException) {
-            // Log the error for debugging
-            println("Invalid LatLng for geocoding: $latitude, $longitude: ${e.message}")
-            "Invalid location" // Message for invalid coordinates
+            Log.e("Geocoding", "Invalid LatLng for geocoding: $latitude, $longitude: ${e.message}")
+            "Invalid location (Coordinates error)"
+        } catch (e: Exception) {
+            Log.e("Geocoding", "Unexpected geocoding error for $latitude, $longitude: ${e.message}")
+            "Address lookup failed (Unknown error)"
         }
     }
 }

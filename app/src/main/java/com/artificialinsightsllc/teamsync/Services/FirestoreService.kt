@@ -6,7 +6,7 @@ import com.artificialinsightsllc.teamsync.Models.Groups
 import com.artificialinsightsllc.teamsync.Models.GroupMembers
 import com.artificialinsightsllc.teamsync.Models.Locations
 import com.artificialinsightsllc.teamsync.Models.UserModel
-import com.artificialinsightsllc.teamsync.Models.MapMarker // NEW IMPORT
+import com.artificialinsightsllc.teamsync.Models.MapMarker
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 
@@ -18,7 +18,7 @@ class FirestoreService(
     private val groupMembersCollection = db.collection("groupMembers")
     private val locationsHistoryCollection = db.collection("locationsHistory")
     private val currentLocationsCollection = db.collection("current_user_locations")
-    private val mapMarkersCollection = db.collection("mapMarkers") // NEW: Collection for map markers
+    private val mapMarkersCollection = db.collection("mapMarkers")
 
     // --- Existing User Profile Methods ---
     suspend fun getUserProfile(uid: String): Result<UserModel> {
@@ -41,7 +41,7 @@ class FirestoreService(
         }
     }
 
-    // --- NEW: Update user's selected active group ID ---
+    // --- Update user's selected active group ID ---
     suspend fun updateUserSelectedActiveGroup(userId: String, groupId: String?): Result<Void?> {
         return try {
             usersCollection.document(userId).update("selectedActiveGroupId", groupId).await()
@@ -81,19 +81,7 @@ class FirestoreService(
         }
     }
 
-    suspend fun getGroupMembershipsForUser(userId: String): Result<List<GroupMembers>> {
-        return try {
-            val querySnapshot = groupMembersCollection.whereEqualTo("userId", userId).get().await()
-            val memberships = querySnapshot.documents.mapNotNull { doc ->
-                doc.toObject(GroupMembers::class.java)?.copy(id = doc.id)
-            }
-            Result.success(memberships)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    // NEW: Get all active group memberships for a specific group
+    // --- RESTORED: Get all active group memberships for a specific group ---
     suspend fun getGroupMembershipsForGroup(groupId: String): Result<List<GroupMembers>> {
         return try {
             val querySnapshot = groupMembersCollection
@@ -109,13 +97,24 @@ class FirestoreService(
         }
     }
 
+    suspend fun getGroupMembershipsForUser(userId: String): Result<List<GroupMembers>> {
+        return try {
+            val querySnapshot = groupMembersCollection.whereEqualTo("userId", userId).get().await()
+            val memberships = querySnapshot.documents.mapNotNull { doc ->
+                doc.toObject(GroupMembers::class.java)?.copy(id = doc.id)
+            }
+            Result.success(memberships)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun getGroupsByIds(groupIds: List<String>): Result<List<Groups>> {
         if (groupIds.isEmpty()) {
             return Result.success(emptyList())
         }
         return try {
             val results = mutableListOf<Groups>()
-            // Firestore 'whereIn' clause has a limit of 10 items
             groupIds.chunked(10).forEach { chunk ->
                 val querySnapshot = groupsCollection.whereIn("groupID", chunk).get().await()
                 results.addAll(querySnapshot.documents.mapNotNull { doc ->
@@ -128,14 +127,12 @@ class FirestoreService(
         }
     }
 
-    // NEW: Get user profiles by a list of user IDs
     suspend fun getUserProfilesByIds(userIds: List<String>): Result<List<UserModel>> {
         if (userIds.isEmpty()) {
             return Result.success(emptyList())
         }
         return try {
             val results = mutableListOf<UserModel>()
-            // Firestore 'whereIn' clause has a limit of 10 items
             userIds.chunked(10).forEach { chunk ->
                 val querySnapshot = usersCollection.whereIn("userId", chunk).get().await()
                 results.addAll(querySnapshot.documents.mapNotNull { doc ->
@@ -148,14 +145,12 @@ class FirestoreService(
         }
     }
 
-    // NEW: Get current locations by a list of user IDs
     suspend fun getCurrentLocationsByIds(userIds: List<String>): Result<List<Locations>> {
         if (userIds.isEmpty()) {
             return Result.success(emptyList())
         }
         return try {
             val results = mutableListOf<Locations>()
-            // Firestore 'whereIn' clause has a limit of 10 items
             userIds.chunked(10).forEach { chunk ->
                 val querySnapshot = currentLocationsCollection.whereIn("userId", chunk).get().await()
                 results.addAll(querySnapshot.documents.mapNotNull { doc ->
@@ -169,7 +164,6 @@ class FirestoreService(
     }
 
 
-    // --- NEW: Find a group by access code and optional password ---
     suspend fun findGroupByAccessCode(accessCode: String, password: String?): Result<Groups?> {
         return try {
             var query = groupsCollection.whereEqualTo("groupAccessCode", accessCode)
@@ -204,7 +198,57 @@ class FirestoreService(
         }
     }
 
-    // NEW: Map Marker Management Methods
+    // --- Update specific fields of an existing GroupMembers document ---
+    suspend fun updateGroupMemberStatus(
+        memberId: String,
+        newLat: Double,
+        newLon: Double,
+        newUpdateTime: Long,
+        newBatteryLevel: Int?,
+        newBatteryChargingStatus: String?,
+        newAppStatus: String?
+    ): Result<Void?> {
+        return try {
+            val updates = mutableMapOf<String, Any>(
+                "lastKnownLocationLat" to newLat,
+                "lastKnownLocationLon" to newLon,
+                "lastLocationUpdateTime" to newUpdateTime,
+                "online" to true // Always set online when updating location/status
+            )
+            newBatteryLevel?.let { updates["batteryLevel"] = it }
+            newBatteryChargingStatus?.let { updates["batteryChargingStatus"] = it }
+            newAppStatus?.let { updates["appStatus"] = it }
+
+            groupMembersCollection.document(memberId).update(updates).await()
+            Result.success(null)
+        } catch (e: Exception) {
+            Log.e("FirestoreService", "Failed to update group member status for $memberId: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    // NEW: Function to get location history for a user within a time range
+    suspend fun getLocationsHistoryForUser(userId: String, startTime: Long, endTime: Long): Result<List<Locations>> {
+        return try {
+            val querySnapshot = locationsHistoryCollection
+                .whereEqualTo("userId", userId)
+                .whereGreaterThanOrEqualTo("timestamp", startTime)
+                .whereLessThanOrEqualTo("timestamp", endTime)
+                .orderBy("timestamp") // Order by timestamp to process chronologically
+                .get()
+                .await()
+            val locations = querySnapshot.documents.mapNotNull { doc ->
+                doc.toObject(Locations::class.java)
+            }
+            Log.d("FirestoreService", "Fetched ${locations.size} history locations for user $userId from $startTime to $endTime.")
+            Result.success(locations)
+        } catch (e: Exception) {
+            Log.e("FirestoreService", "Failed to fetch location history for user $userId: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    // --- Map Marker Management Methods ---
     suspend fun addMapMarker(marker: MapMarker): Result<String> {
         return try {
             val docRef = mapMarkersCollection.add(marker).await()

@@ -2,11 +2,19 @@
 package com.artificialinsightsllc.teamsync
 
 import android.app.Application
+import android.app.Activity
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.artificialinsightsllc.teamsync.Services.GroupMonitorService
 import com.artificialinsightsllc.teamsync.Services.MarkerMonitorService
 
-class TeamSyncApplication : Application() {
+// Implement Application.ActivityLifecycleCallbacks to track app foreground/background state
+class TeamSyncApplication : Application(), Application.ActivityLifecycleCallbacks {
 
     lateinit var groupMonitorService: GroupMonitorService
         private set
@@ -14,20 +22,80 @@ class TeamSyncApplication : Application() {
     lateinit var markerMonitorService: MarkerMonitorService
         private set
 
+    // State to track if the app is currently in the foreground
+    var isAppInForeground: Boolean by mutableStateOf(false)
+        private set
+
+    // Counter for started activities. Used to determine foreground/background.
+    private var activityCount = 0
+
+    // Handler to introduce a small delay for accurate background detection
+    private val handler = Handler(Looper.getMainLooper())
+    private var backgroundDetectionRunnable: Runnable? = null
+
+
     override fun onCreate() {
         super.onCreate()
         Log.d("TeamSyncApplication", "Application onCreate: Initializing services.")
-        // NEW: Initialize MarkerMonitorService first
+        // Register activity lifecycle callbacks
+        registerActivityLifecycleCallbacks(this)
+
         markerMonitorService = MarkerMonitorService()
-        // Initialize GroupMonitorService, passing the *same* markerMonitorService instance
         groupMonitorService = GroupMonitorService(applicationContext, markerMonitorService = markerMonitorService)
     }
 
     override fun onTerminate() {
         super.onTerminate()
         Log.d("TeamSyncApplication", "Application onTerminate: Shutting down services.")
-        // Ensure services are shut down when the application process terminates
+        // Unregister activity lifecycle callbacks
+        unregisterActivityLifecycleCallbacks(this)
         groupMonitorService.shutdown()
         markerMonitorService.shutdown()
+    }
+
+    // --- Activity Lifecycle Callback Implementations ---
+
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+        Log.d("AppStatus", "onActivityCreated: ${activity.javaClass.simpleName}")
+    }
+
+    override fun onActivityStarted(activity: Activity) {
+        activityCount++
+        Log.d("AppStatus", "onActivityStarted: ${activity.javaClass.simpleName}, Count: $activityCount")
+        // If coming from background, cancel any pending background detection
+        backgroundDetectionRunnable?.let { handler.removeCallbacks(it) }
+        isAppInForeground = true // Immediately set to foreground as an activity started
+    }
+
+    override fun onActivityResumed(activity: Activity) {
+        Log.d("AppStatus", "onActivityResumed: ${activity.javaClass.simpleName}")
+        // isAppInForeground is already true from onActivityStarted
+    }
+
+    override fun onActivityPaused(activity: Activity) {
+        Log.d("AppStatus", "onActivityPaused: ${activity.javaClass.simpleName}")
+        // Set a delayed runnable to check if app goes to background
+        backgroundDetectionRunnable = Runnable {
+            if (activityCount == 0) { // No activities left started
+                isAppInForeground = false
+                Log.d("AppStatus", "App detected as in background")
+            }
+        }
+        // Small delay to account for quick activity transitions within the app
+        handler.postDelayed(backgroundDetectionRunnable!!, 500) // 500ms delay
+    }
+
+    override fun onActivityStopped(activity: Activity) {
+        activityCount--
+        Log.d("AppStatus", "onActivityStopped: ${activity.javaClass.simpleName}, Count: $activityCount")
+        // onActivityPaused would have scheduled the check
+    }
+
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {
+        Log.d("AppStatus", "onActivitySaveInstanceState: ${activity.javaClass.simpleName}")
+    }
+
+    override fun onActivityDestroyed(activity: Activity) {
+        Log.d("AppStatus", "onActivityDestroyed: ${activity.javaClass.simpleName}")
     }
 }

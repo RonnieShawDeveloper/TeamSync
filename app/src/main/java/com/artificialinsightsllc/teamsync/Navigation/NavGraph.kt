@@ -18,7 +18,8 @@ import com.artificialinsightsllc.teamsync.Screens.AddMapMarkerScreen
 import com.artificialinsightsllc.teamsync.Screens.PreCheckScreen
 import com.artificialinsightsllc.teamsync.Screens.Signup.SignupScreen
 import com.artificialinsightsllc.teamsync.Screens.TravelReportScreen
-import com.artificialinsightsllc.teamsync.Screens.UserSettingsScreen // NEW IMPORT
+import com.artificialinsightsllc.teamsync.Screens.UserSettingsScreen
+import com.artificialinsightsllc.teamsync.Screens.ShutdownScreen // NEW IMPORT for ShutdownScreen
 
 @Composable
 fun AppNavGraph(navController: NavHostController) {
@@ -50,11 +51,12 @@ fun AppNavGraph(navController: NavHostController) {
         composable(NavRoutes.ADD_MAP_MARKER) {
             AddMapMarkerScreen(navController).Content()
         }
-        // NEW: User Settings Screen
         composable(NavRoutes.USER_SETTINGS) {
             UserSettingsScreen(navController).Content()
         }
-        // Travel Report Screen
+        composable(NavRoutes.SHUTDOWN) { // NEW: Shutdown Screen
+            ShutdownScreen(navController).Content()
+        }
         composable(
             route = NavRoutes.TRAVEL_REPORT,
             arguments = listOf(navArgument("userId") { type = NavType.StringType })
@@ -69,3 +71,4 @@ fun AppNavGraph(navController: NavHostController) {
         }
     }
 }
+

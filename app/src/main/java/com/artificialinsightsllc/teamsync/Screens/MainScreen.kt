@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Close // Import Close icon
+import androidx.compose.material.icons.filled.ExitToApp // Icon for Logout/Shutdown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FloatingActionButton
@@ -182,7 +183,7 @@ class MainScreen(private val navController: NavHostController) {
         val activeGroupMember by groupMonitorService.activeGroupMember.collectAsStateWithLifecycle()
         val userMessage by groupMonitorService.userMessage.collectAsStateWithLifecycle()
         val effectiveLocationUpdateInterval by groupMonitorService.effectiveLocationUpdateInterval.collectAsStateWithLifecycle()
-        val isLocationSharingGloballyEnabled by groupMonitorService.isLocationSharingGloballyEnabled.collectAsStateWithLifecycle()
+        // val isLocationSharingGloballyEnabled by groupMonitorService.isLocationSharingGloballyEnabled.collectAsStateWithLifecycle()
 
         val otherMembersLocations by groupMonitorService.otherMembersLocations.collectAsStateWithLifecycle()
         val otherMembersProfiles by groupMonitorService.otherMembersProfiles.collectAsStateWithLifecycle()
@@ -646,6 +647,15 @@ class MainScreen(private val navController: NavHostController) {
                         ),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // NEW FAB for ShutdownScreen
+                    FloatingActionButton(
+                        onClick = { navController.navigate(NavRoutes.SHUTDOWN) },
+                        containerColor = MaterialTheme.colorScheme.error, // A distinct color for shutdown
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ) {
+                        Icon(Icons.Filled.ExitToApp, "Logout/Shutdown")
+                    }
+
                     FloatingActionButton(
                         onClick = {
                             mapLockedToUserLocation = !mapLockedToUserLocation
@@ -674,7 +684,7 @@ class MainScreen(private val navController: NavHostController) {
                         contentColor = if (mapLockedToUserLocation) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Lock,
+                            imageVector = if (mapLockedToUserLocation) Icons.Filled.Lock else Icons.Filled.LockOpen,
                             contentDescription = if (mapLockedToUserLocation) "Lock Map" else "Unlock Map"
                         )
                     }
@@ -886,3 +896,4 @@ class MainScreen(private val navController: NavHostController) {
         Log.d("MainScreen", "Stopped local GPS location updates.")
     }
 }
+

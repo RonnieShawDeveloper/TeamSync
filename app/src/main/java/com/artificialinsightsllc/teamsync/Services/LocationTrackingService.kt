@@ -44,6 +44,7 @@ class LocationTrackingService : Service() {
     private val auth = FirebaseAuth.getInstance()
 
     private var activeGroupMemberId: String? = null
+    private var isCurrentlyTracking: Boolean = false // Internal state to track if updates are active
 
     companion object {
         const val CHANNEL_ID = "TeamSyncLocationChannel"
@@ -66,13 +67,17 @@ class LocationTrackingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("LocationService", "Service onStartCommand: STARTING. Action: ${intent?.action}")
 
-        // Ensure service runs in foreground (required for location tracking)
+        val app = application as TeamSyncApplication
+
+        // Always attempt to start foreground for the notification requirement
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
                 Log.e("LocationService", "POST_NOTIFICATIONS permission not granted. Cannot start foreground service (notification requirement).")
+                // Cannot run foreground without notification permission on Android 13+. Stop yourself.
                 stopSelf()
+                app.setLocationServiceState(false, 0L, null)
                 return START_NOT_STICKY
             }
         }
@@ -84,6 +89,7 @@ class LocationTrackingService : Service() {
         } catch (e: Exception) {
             Log.e("LocationService", "CRITICAL ERROR: Failed to call startForeground: ${e.message}", e)
             stopSelf()
+            app.setLocationServiceState(false, 0L, null)
             return START_NOT_STICKY
         }
 
@@ -92,25 +98,55 @@ class LocationTrackingService : Service() {
         when (intent?.action) {
             ACTION_START_SERVICE, ACTION_UPDATE_TRACKING_STATE -> {
                 val locationInterval = intent.getLongExtra(EXTRA_LOCATION_INTERVAL, 300000L)
-                val isSharingLocation = intent.getBooleanExtra(EXTRA_IS_SHARING_LOCATION, true)
-                activeGroupMemberId = intent.getStringExtra(EXTRA_ACTIVE_GROUP_MEMBER_ID)
+                val isSharingLocationRequested = intent.getBooleanExtra(EXTRA_IS_SHARING_LOCATION, true)
+                val memberIdFromIntent = intent.getStringExtra(EXTRA_ACTIVE_GROUP_MEMBER_ID)
 
-                Log.d("LocationService", "onStartCommand received activeGroupMemberId: $activeGroupMemberId")
-                Log.d("LocationService", "Handling action: ${intent?.action}. Sharing: $isSharingLocation, Interval: $locationInterval. Member ID: $activeGroupMemberId")
+                Log.d("LocationService", "onStartCommand received activeGroupMemberId: $memberIdFromIntent")
+                Log.d("LocationService", "Handling action: ${intent?.action}. Sharing Requested: $isSharingLocationRequested, Interval: $locationInterval. Member ID: $memberIdFromIntent")
 
-                if (isSharingLocation && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && activeGroupMemberId != null) {
-                    startLocationUpdates(locationInterval)
-                    Log.d("LocationService", "Location updates STARTED based on intent.")
+                // Check for location permission at the point of starting updates
+                val hasFineLocationPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+                // Get current actual state from TeamSyncApplication's observed flows
+                val (actualServiceIsRunning, actualTrackingInterval, actualTrackingMemberId) = app.locationServiceRunningState.value
+
+                // Decide if we should actually start/continue tracking location
+                if (isSharingLocationRequested && hasFineLocationPermission && memberIdFromIntent != null) {
+                    // FIX: Access currentTrackingInterval and currentTrackingMemberId from the triple
+                    if (!isCurrentlyTracking || locationInterval != actualTrackingInterval || memberIdFromIntent != actualTrackingMemberId) {
+                        // Only restart updates if tracking state or interval has changed
+                        stopLocationUpdates() // Stop existing to apply new settings
+                        startLocationUpdates(locationInterval)
+                        activeGroupMemberId = memberIdFromIntent
+                        isCurrentlyTracking = true
+                        app.setLocationServiceState(true, locationInterval, activeGroupMemberId)
+                        Log.d("LocationService", "Location updates STARTED/RESTARTED. Interval: $locationInterval, Member ID: $activeGroupMemberId")
+                    } else {
+                        Log.d("LocationService", "Location updates already running with same settings. No action needed.")
+                    }
                 } else {
+                    // Conditions not met for tracking. Stop updates and remove notification.
                     stopLocationUpdates()
-                    Log.d("LocationService", "Location updates STOPPED based on intent (sharing=$isSharingLocation, memberIdIsNull=${activeGroupMemberId == null}).")
+                    activeGroupMemberId = null
+                    isCurrentlyTracking = false
+                    app.setLocationServiceState(false, 0L, null)
+                    stopForeground(true) // Remove notification
+                    Log.d("LocationService", "Location updates STOPPED and notification removed via stopForeground(true). Conditions: (sharing=$isSharingLocationRequested, hasPermission=$hasFineLocationPermission, memberIdIsNull=${memberIdFromIntent == null}).")
+                    // If the service is explicitly told to stop tracking, it likely has no other purpose
+                    // and should stop itself to release resources.
+                    // The GroupMonitorService is now designed to send ACTION_STOP_SERVICE for full shutdown.
+                    // So, for ACTION_UPDATE_TRACKING_STATE, we just stop updates and foreground,
+                    // relying on GMS to send ACTION_STOP_SERVICE when process needs to terminate.
                 }
             }
             ACTION_STOP_SERVICE -> {
                 Log.d("LocationService", "Handling ACTION_STOP_SERVICE. Stopping service completely.")
                 stopLocationUpdates()
                 activeGroupMemberId = null
-                stopSelf()
+                isCurrentlyTracking = false
+                stopForeground(true) // Ensure notification is removed
+                stopSelf() // Stop the service process
+                app.setLocationServiceState(false, 0L, null) // Update global state
             }
         }
         return START_STICKY
@@ -126,6 +162,9 @@ class LocationTrackingService : Service() {
         stopLocationUpdates()
         serviceScope.cancel()
         activeGroupMemberId = null
+        isCurrentlyTracking = false
+        // Ensure state is updated on destruction, especially if it was killed by system
+        (application as TeamSyncApplication).setLocationServiceState(false, 0L, null)
     }
 
     private fun createNotificationChannel() {
@@ -157,7 +196,7 @@ class LocationTrackingService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
+            .setOngoing(true) // Makes the notification non-dismissible by user swipe
     }
 
     private fun setupLocationCallback() {
@@ -166,10 +205,12 @@ class LocationTrackingService : Service() {
                 locationResult.lastLocation?.let { location ->
                     Log.d("LocationService", "Location received: ${location.latitude}, ${location.longitude}")
 
-                    if (auth.currentUser != null && activeGroupMemberId != null) {
+                    // Check if current user is authenticated and if an active group member ID is set
+                    // and if tracking is actually enabled based on internal state
+                    if (auth.currentUser != null && activeGroupMemberId != null && isCurrentlyTracking) {
                         sendLocationAndStatusToFirestore(location, activeGroupMemberId!!)
                     } else {
-                        Log.d("LocationService", "Location received, but not sending to Firestore (userLogged=${auth.currentUser?.uid != null}, memberIdIsNull=${activeGroupMemberId == null}).")
+                        Log.d("LocationService", "Location received, but not sending to Firestore. (Auth: ${auth.currentUser?.uid != null}, MemberId: ${activeGroupMemberId}, Tracking: $isCurrentlyTracking).")
                     }
                 }
             }
@@ -179,8 +220,7 @@ class LocationTrackingService : Service() {
     @SuppressLint("MissingPermission") // Permissions are handled in PreCheckScreen and checked in onStartCommand
     private fun startLocationUpdates(interval: Long) {
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
-            // FIX: Changed setMinUpdateIntervalMillis to match the desired interval
-            .setMinUpdateIntervalMillis(interval)
+            .setMinUpdateIntervalMillis(interval) // Set min interval to the requested interval
             .build()
 
         try {
@@ -196,9 +236,10 @@ class LocationTrackingService : Service() {
     }
 
     private fun stopLocationUpdates() {
-        if (::fusedLocationClient.isInitialized) {
+        if (::fusedLocationClient.isInitialized && isCurrentlyTracking) { // Only try to remove if initialized and tracking
             fusedLocationClient.removeLocationUpdates(locationCallback)
             Log.d("LocationService", "Stopped FusedLocationProviderClient updates.")
+            isCurrentlyTracking = false // Update internal state
         }
     }
 
@@ -257,7 +298,7 @@ class LocationTrackingService : Service() {
                 }
             }
         } else {
-            Log.w("LocationService", "No authenticated user to save location for.")
+            Log.w("LocationService", "No authenticated user or active group member to save location for.")
         }
     }
 }

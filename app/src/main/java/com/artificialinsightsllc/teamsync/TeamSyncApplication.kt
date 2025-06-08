@@ -12,6 +12,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.artificialinsightsllc.teamsync.Services.GroupMonitorService
 import com.artificialinsightsllc.teamsync.Services.MarkerMonitorService
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 // Implement Application.ActivityLifecycleCallbacks to track app foreground/background state
 class TeamSyncApplication : Application(), Application.ActivityLifecycleCallbacks {
@@ -32,6 +36,24 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
     // Handler to introduce a small delay for accurate background detection
     private val handler = Handler(Looper.getMainLooper())
     private var backgroundDetectionRunnable: Runnable? = null
+
+    // NEW: MutableStateFlow to hold the combined state of LocationTrackingService
+    // This allows GroupMonitorService to observe these states as Flows.
+    // Triple<Boolean, Long, String?> represents <isRunning, interval, memberId>
+    private val _locationServiceRunningState = MutableStateFlow(Triple(false, 0L, null as String?))
+    val locationServiceRunningState: StateFlow<Triple<Boolean, Long, String?>> = _locationServiceRunningState.asStateFlow()
+
+    /**
+     * Updates the internal state variables reflecting the LocationTrackingService's status.
+     * This method is called by the LocationTrackingService itself.
+     * @param running True if the service is actively running and tracking.
+     * @param interval The current tracking interval.
+     * @param memberId The current active group member ID being tracked.
+     */
+    internal fun setLocationServiceState(running: Boolean, interval: Long, memberId: String?) {
+        _locationServiceRunningState.update { Triple(running, interval, memberId) }
+        Log.d("TeamSyncApplication", "setLocationServiceState updated to: Running=$running, Interval=$interval, MemberId=$memberId")
+    }
 
 
     override fun onCreate() {

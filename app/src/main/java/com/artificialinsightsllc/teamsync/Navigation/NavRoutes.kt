@@ -12,5 +12,7 @@ object NavRoutes {
     const val TEAM_LIST = "team_list"
     const val ADD_MAP_MARKER = "add_map_marker"
     const val TRAVEL_REPORT = "travel_report/{userId}"
-    const val USER_SETTINGS = "user_settings" // NEW ROUTE for User Settings
+    const val USER_SETTINGS = "user_settings"
+    const val SHUTDOWN = "shutdown" // NEW ROUTE for Shutdown Screen
 }
+

@@ -17,7 +17,8 @@ import com.artificialinsightsllc.teamsync.Screens.TeamListScreen
 import com.artificialinsightsllc.teamsync.Screens.AddMapMarkerScreen
 import com.artificialinsightsllc.teamsync.Screens.PreCheckScreen
 import com.artificialinsightsllc.teamsync.Screens.Signup.SignupScreen
-import com.artificialinsightsllc.teamsync.Screens.TravelReportScreen // NEW IMPORT
+import com.artificialinsightsllc.teamsync.Screens.TravelReportScreen
+import com.artificialinsightsllc.teamsync.Screens.UserSettingsScreen // NEW IMPORT
 
 @Composable
 fun AppNavGraph(navController: NavHostController) {
@@ -49,7 +50,11 @@ fun AppNavGraph(navController: NavHostController) {
         composable(NavRoutes.ADD_MAP_MARKER) {
             AddMapMarkerScreen(navController).Content()
         }
-        // NEW: Travel Report Screen
+        // NEW: User Settings Screen
+        composable(NavRoutes.USER_SETTINGS) {
+            UserSettingsScreen(navController).Content()
+        }
+        // Travel Report Screen
         composable(
             route = NavRoutes.TRAVEL_REPORT,
             arguments = listOf(navArgument("userId") { type = NavType.StringType })
@@ -58,7 +63,6 @@ fun AppNavGraph(navController: NavHostController) {
             if (userId != null) {
                 TravelReportScreen(navController, userId).Content()
             } else {
-                // Handle error: userId is null, maybe navigate back or show a Toast
                 Log.e("AppNavGraph", "TravelReportScreen: userId argument is null.")
                 navController.popBackStack()
             }

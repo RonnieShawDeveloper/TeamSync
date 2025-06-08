@@ -679,7 +679,7 @@ class MainScreen(private val navController: NavHostController) {
                         )
                     }
                     FloatingActionButton(
-                        onClick = { toastMessage("Member Preferences/Settings clicked!") },
+                        onClick = { navController.navigate(NavRoutes.USER_SETTINGS) }, // Navigate to UserSettingsScreen
                         containerColor = fabEnabledColor, contentColor = fabEnabledContentColor
                     ) { Icon(Icons.Filled.Settings, "Member Settings") }
 

@@ -22,10 +22,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets // Import WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues // Import asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBars // Import navigationBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -304,15 +307,16 @@ class PreCheckScreen(private val navController: NavHostController) {
         var showRecheckButton by remember { mutableStateOf(false) }
 
 
+        // DarkBlue definition (assuming it's not globally available in this specific file scope)
+        val DarkBlue = Color(0xFF0D47A1)
+
+
         // --- Permission Launcher for system dialogs ---
         val permissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestMultiplePermissions()
         ) { permissionsMap ->
             Log.d("PreCheckScreen", "System permission dialog result received. Updating permission states.")
             updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo) // Update UI immediately
-            if (!allPermissionsFullyGranted) { // If not all granted after a manifest permission request
-                showRecheckButton = true // Show recheck button
-            }
             // The LaunchedEffect(allPermissionsFullyGranted) will now handle navigation if all are granted.
         }
 
@@ -325,9 +329,6 @@ class PreCheckScreen(private val navController: NavHostController) {
             coroutineScope.launch {
                 delay(300L) // Small delay to allow system state to update
                 updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo)
-                if (!allPermissionsFullyGranted) { // If not all granted after battery opt attempt
-                    showRecheckButton = true // Show recheck button
-                }
             }
         }
 
@@ -368,35 +369,26 @@ class PreCheckScreen(private val navController: NavHostController) {
             // After user check, update all permission states initially
             updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo)
 
-            // Determine if recheck button should be visible after initial load
+            // CRITICAL LOGIC FOR INITIAL DISPLAY:
+            // If all permissions are granted, we keep showLoadingIndicator as true, and auto-navigate.
+            // This ensures permission cards are never shown.
+            // If NOT all are granted, we set showLoadingIndicator to false to reveal the cards.
             if (!allPermissionsFullyGranted) {
-                showRecheckButton = true
-            }
-
-            // Auto-navigate if all are already granted on launch
-            // The check for allPermissionsFullyGranted is now handled by the separate LaunchedEffect below
-            // to ensure it triggers any time the permissionStates.value changes.
-            if (allPermissionsFullyGranted) {
-                Log.d("PreCheckScreen", "All permissions initially granted. Triggering auto-navigation via state change.")
-                // The actual service start and navigation will be handled by LaunchedEffect(allPermissionsFullyGranted)
+                showLoadingIndicator = false // Permissions are missing, so show the cards.
+                showRecheckButton = true // Enable recheck button if cards are shown.
+                Log.d("PreCheckScreen", "Permissions missing after initial check. Displaying permission options.")
             } else {
-                showLoadingIndicator = false // Done with initial loading, show buttons
-                Log.d("PreCheckScreen", "Permissions missing. Displaying permission options.")
+                Log.d("PreCheckScreen", "All permissions initially granted. Preparing for auto-navigation. Keeping loading indicator visible.")
             }
         }
 
-        // --- NEW LaunchedEffect to automatically proceed when all permissions are granted ---
-        // This ensures that whenever permissionStates.value updates AND all are granted,
-        // the app automatically navigates.
+        // --- LaunchedEffect to automatically proceed when all permissions are granted ---
         LaunchedEffect(allPermissionsFullyGranted, initialUserCheckDone) {
             // Only proceed if all permissions are granted AND we've finished the initial user check
-            // and we're not already loading (which indicates a pending action from a button click/launcher result)
             if (allPermissionsFullyGranted && initialUserCheckDone) {
                 Log.d("PreCheckScreen", "All permissions now granted (triggered by state change). Auto-navigating.")
-                // It is now the responsibility of GroupMonitorService to start/stop the LocationTrackingService
-                // and pass the memberId correctly.
                 groupMonitorService.setUiPermissionsGranted(true)
-                groupMonitorService.startMonitoring(initialUserSelectedGroupId) // Ensure latest selected group is passed
+                groupMonitorService.startMonitoring(initialUserSelectedGroupId)
                 navController.navigate(NavRoutes.MAIN) {
                     popUpTo(NavRoutes.PRE_CHECK) { inclusive = true }
                 }
@@ -415,6 +407,7 @@ class PreCheckScreen(private val navController: NavHostController) {
                 modifier = Modifier.fillMaxSize()
             )
 
+            // This outer 'if' determines if we show the loading screen OR the permission cards.
             if (showLoadingIndicator) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
@@ -422,9 +415,15 @@ class PreCheckScreen(private val navController: NavHostController) {
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     CircularProgressIndicator(modifier = Modifier.padding(bottom = 16.dp))
-                    Text("Loading user data and checking initial permissions...", color = Color.White)
+                    Text(
+                        text = "Loading user data and checking initial permissions...",
+                        color = DarkBlue, // Set to DarkBlue
+                        fontWeight = FontWeight.Bold, // Set to Bold
+                        textAlign = TextAlign.Center, // Centered horizontally
+                        modifier = Modifier.fillMaxWidth() // Fill width for centering
+                    )
                 }
-            } else {
+            } else if (!allPermissionsFullyGranted){ // This else block will ONLY be composed and rendered if showLoadingIndicator is false
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -436,7 +435,7 @@ class PreCheckScreen(private val navController: NavHostController) {
                         text = "Security Permissions",
                         fontSize = 32.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        color = Color.Blue,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(bottom = 24.dp)
                     )
@@ -446,7 +445,6 @@ class PreCheckScreen(private val navController: NavHostController) {
                         val buttonColor = if (isGranted) Color(0xFF4CAF50) else Color(0xFFF44336) // Green vs Red
 
                         // Special handling for Background Location button enable state
-                        // and NEW: Battery Optimization button enable state
                         val buttonEnabled = when (permInfo.type) {
                             PermissionType.LOCATION_BACKGROUND -> permissionStates.value[PermissionType.LOCATION_FOREGROUND] == true
                             PermissionType.BATTERY_OPTIMIZATION -> true // Always enabled, just launches system settings
@@ -455,20 +453,18 @@ class PreCheckScreen(private val navController: NavHostController) {
 
                         PermissionItemCard(
                             title = permInfo.title,
-                            direction = permInfo.direction, // Pass the new direction parameter (moved up)
+                            direction = permInfo.direction,
                             description = permInfo.description,
                             isGranted = isGranted,
                             buttonColor = buttonColor,
                             buttonEnabled = buttonEnabled,
                             onGrantClick = {
                                 if (permInfo.isSystemSetting) {
-                                    // Handle system settings intents separately
                                     if (permInfo.type == PermissionType.BATTERY_OPTIMIZATION) {
                                         val packageName = context.packageName
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
                                             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-                                                // Function to attempt launching an intent and showing a fallback dialog
                                                 fun attemptLaunchBatterySettings(index: Int) {
                                                     val intentsToTry = listOf(
                                                         Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -480,11 +476,11 @@ class PreCheckScreen(private val navController: NavHostController) {
                                                         Intent(Settings.ACTION_SETTINGS)
                                                     )
 
-                                                    if (index >= intentsToTry.size) { // No more intents to try, show final manual dialog
+                                                    if (index >= intentsToTry.size) {
                                                         Log.e("PreCheckScreen", "All programmatic attempts to open battery optimization settings failed.")
                                                         alertDialogTitle = "Action Required: Manual Steps"
                                                         alertDialogMessage = "Could not open any relevant settings automatically. Please manually navigate to your device's settings:\n\n1. Go to 'Settings'\n2. Tap 'Apps & notifications' (or 'Apps' / 'Applications')\n3. Find and tap 'TeamSync'\n4. Tap 'Battery' (or 'Battery usage')\n5. Choose 'Unrestricted' or 'Not optimized'. This is essential for continuous background tracking."
-                                                        alertDialogConfirmAction = null // No specific action needed after this
+                                                        alertDialogConfirmAction = null
                                                         showAlertDialog = true
                                                         return
                                                     }
@@ -498,7 +494,6 @@ class PreCheckScreen(private val navController: NavHostController) {
                                                             batteryOptimizationLauncher.launch(intent)
                                                         } catch (e: Exception) {
                                                             Log.e("PreCheckScreen", "Exception launching intent ${intent.action} (Index: $index): ${e.message}", e)
-                                                            // If launch fails, tell user and offer next step via dialog
                                                             alertDialogTitle = "Battery Optimization Settings"
                                                             alertDialogMessage = "Could not open settings using this method. Please try the next option.\n\nError: ${e.localizedMessage}"
                                                             alertDialogConfirmAction = { attemptLaunchBatterySettings(index + 1) }
@@ -506,7 +501,6 @@ class PreCheckScreen(private val navController: NavHostController) {
                                                         }
                                                     } else {
                                                         Log.w("PreCheckScreen", "Intent ${intent.action} (Index: $index) cannot be resolved on this device. Trying next.")
-                                                        // If intent cannot be resolved, immediately try the next one via a dialog
                                                         alertDialogTitle = "Battery Optimization Settings"
                                                         alertDialogMessage = "This method is not supported on your device. Please try the next option."
                                                         alertDialogConfirmAction = { attemptLaunchBatterySettings(index + 1) }
@@ -514,8 +508,6 @@ class PreCheckScreen(private val navController: NavHostController) {
                                                     }
                                                 }
 
-                                                // Start the sequence of attempts. The dialogs will handle progression.
-                                                // First, confirm to the user what's about to happen.
                                                 alertDialogTitle = "Open Battery Settings"
                                                 alertDialogMessage = "TeamSync will now attempt to open your device's battery optimization settings. Please tap 'OK' to proceed. You may need to manually select 'Unrestricted' or 'Not optimized' for TeamSync on the next screen."
                                                 alertDialogConfirmAction = { attemptLaunchBatterySettings(0) }
@@ -529,8 +521,7 @@ class PreCheckScreen(private val navController: NavHostController) {
                                             }
                                         }
                                     }
-                                } else {
-                                    // Handle regular manifest permissions
+                                } else { // Regular manifest permissions
                                     if (!isGranted) {
                                         permInfo.manifestPermissions?.let {
                                             permissionLauncher.launch(it)
@@ -540,53 +531,40 @@ class PreCheckScreen(private val navController: NavHostController) {
                                             alertDialogConfirmAction = null
                                             showAlertDialog = true
                                         }
+                                    } else { // Already granted manifest permission
+                                        alertDialogTitle = "${permInfo.title} is already granted!"
+                                        alertDialogMessage = "This permission is already set to '${permInfo.direction}'. You do not need to take any action."
+                                        alertDialogConfirmAction = null
+                                        showAlertDialog = true
                                     }
-                                    // If already granted, show dialog. This is handled by the check below in this block.
-                                    // No 'else' needed here, as the outer 'if (!isGranted)' already covers it.
-                                }
-                                // This 'else' block applies if the permission is *already granted* (isGranted = true) for regular manifest permissions
-                                // and the battery optimization check above wasn't met.
-                                if (isGranted && !permInfo.isSystemSetting) { // Only show for manifest permissions if already granted
-                                    alertDialogTitle = "${permInfo.title} is already granted!"
-                                    alertDialogMessage = "This permission is already set to '${permInfo.direction}'. You do not need to take any action."
-                                    alertDialogConfirmAction = null
-                                    showAlertDialog = true
                                 }
                             }
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                     }
 
-                    if (!allPermissionsFullyGranted) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "All permissions must be granted to continue.",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        // NEW: Re-Check Permissions Button
-                        if (showRecheckButton) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = {
-                                    Log.d("PreCheckScreen", "Re-Check Permissions button clicked. Updating all permission states.")
-                                    updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo)
-                                },
-                                modifier = Modifier.fillMaxWidth(0.7f),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                            ) {
-                                Text("Re-Check Permissions", color = Color.White)
-                            }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "All permissions must be granted to continue.",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    // Re-Check Permissions Button (Only visible if not all permissions are granted)
+                    if (showRecheckButton) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                Log.d("PreCheckScreen", "Re-Check Permissions button clicked. Updating all permission states.")
+                                updateAllPermissionStates(context, permissionStates, requiredPermissionsInfo)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth(0.7f)
+                                .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                        ) {
+                            Text("Re-Check Permissions", color = Color.White)
                         }
-                    } else {
-                        // Optional: Show a "All permissions granted, proceeding..." message briefly
-                        Text(
-                            "All permissions granted. Proceeding to TeamSync...",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center
-                        )
                     }
                 }
             }
@@ -613,7 +591,7 @@ class PreCheckScreen(private val navController: NavHostController) {
     @Composable
     private fun PermissionItemCard(
         title: String,
-        direction: String?, // NEW: direction parameter
+        direction: String?,
         description: String,
         isGranted: Boolean,
         buttonColor: Color,
@@ -623,6 +601,7 @@ class PreCheckScreen(private val navController: NavHostController) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // Fixed background color to be always 0.9f alpha when cards are displayed
                 .background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(12.dp))
                 .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
                 .padding(16.dp),
@@ -635,13 +614,12 @@ class PreCheckScreen(private val navController: NavHostController) {
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
-            // NEW: Display specific direction if available
             direction?.let {
                 Text(
                     text = "Direction: ${it}",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.Red // Bold red color
+                    color = Color.Red
                 )
             }
             Text(
@@ -652,10 +630,10 @@ class PreCheckScreen(private val navController: NavHostController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = onGrantClick,
-                enabled = !isGranted && buttonEnabled, // Button is enabled only if not granted AND its specific dependency is met
+                enabled = !isGranted && buttonEnabled,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = buttonColor,
-                    disabledContainerColor = buttonColor.copy(alpha = 0.5f) // Lighter shade when disabled
+                    disabledContainerColor = buttonColor.copy(alpha = 0.5f)
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -664,9 +642,9 @@ class PreCheckScreen(private val navController: NavHostController) {
                     color = Color.White
                 )
             }
-            if (!buttonEnabled && !isGranted) { // Show message if disabled due to dependency (e.g. background location needs foreground first)
+            if (!buttonEnabled && !isGranted) {
                 Text(
-                    text = "Requires Foreground Location first.", // This specific message only applies to background location
+                    text = "Requires Foreground Location first.",
                     fontSize = 12.sp,
                     color = Color.Gray
                 )

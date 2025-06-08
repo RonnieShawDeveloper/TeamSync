@@ -6,6 +6,11 @@ data class Locations(
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
     val timestamp: Long = System.currentTimeMillis(),
-    val speed: Float? = null, // New: Speed in meters/second
-    val bearing: Float? = null // New: Bearing in degrees (0-360)
+    val speed: Float? = null,
+    val bearing: Float? = null,
+    val batteryLevel: Int? = null,
+    val batteryChargingStatus: String? = null, // "CHARGING", "DISCHARGING", "FULL", "UNKNOWN"
+    val appStatus: String? = null, // "FOREGROUND", "BACKGROUND"
+    val activeTrackingGroupId: String? = null // NEW: The ID of the group this user is actively tracking for
 )
+

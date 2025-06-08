@@ -125,6 +125,16 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape // Import CircleShape
 
+// NEW: Import DarkBlue and LightCream from your theme colors
+import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
+import com.artificialinsightsllc.teamsync.ui.theme.LightCream
+import androidx.compose.foundation.shape.RoundedCornerShape // For card shape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.draw.shadow
+
 class MainScreen(private val navController: NavHostController) {
 
     data class MarkerDisplayInfo(
@@ -135,9 +145,10 @@ class MainScreen(private val navController: NavHostController) {
         val profilePhotoUrl: String?,
         val latLng: LatLng?,
         val mapMarker: MapMarker? = null,
-        val userId: String? = null // NEW: Added userId to MarkerDisplayInfo
+        val userId: String? = null
     )
 
+    @OptIn(ExperimentalMaterial3Api::class)
     @SuppressLint("MissingPermission")
     @Composable
     fun Content() {
@@ -156,7 +167,7 @@ class MainScreen(private val navController: NavHostController) {
         // UI state variables
         var userLocation by remember { mutableStateOf<Location?>(null) }
         var mapLockedToUserLocation by remember { mutableStateOf(true) }
-        var hasPerformedInitialCenter by remember { mutableStateOf(false) }
+        var hasPerformedInitialCenter by remember { mutableStateOf(false) } // Indicates if map has centered on user's first GPS fix
 
         var showPermissionRationaleDialog by remember { mutableStateOf(false) }
         var allPermissionsGranted by remember { mutableStateOf(false) }
@@ -169,9 +180,13 @@ class MainScreen(private val navController: NavHostController) {
         var showCustomMarkerInfoDialog by remember { mutableStateOf(false) }
         var currentMarkerInfo by remember { mutableStateOf<MarkerDisplayInfo?>(null) }
 
+        // NEW: State for the map loading dialog
+        var showMapLoadingDialog by remember { mutableStateOf(true) } // Initially true
+
 
         val cameraPositionState = rememberCameraPositionState {
-            position = LatLng(27.9506, -82.4572).let { CameraPosition.fromLatLngZoom(it, 10f) }
+            // Initial camera position changed to approximate center of contiguous US, zoomed out to show the whole country.
+            position = LatLng(39.8283, -98.5795).let { CameraPosition.fromLatLngZoom(it, 3f) }
         }
         val fusedLocationClient: FusedLocationProviderClient = remember {
             getFusedLocationProviderClient(context)
@@ -183,7 +198,6 @@ class MainScreen(private val navController: NavHostController) {
         val activeGroupMember by groupMonitorService.activeGroupMember.collectAsStateWithLifecycle()
         val userMessage by groupMonitorService.userMessage.collectAsStateWithLifecycle()
         val effectiveLocationUpdateInterval by groupMonitorService.effectiveLocationUpdateInterval.collectAsStateWithLifecycle()
-        // val isLocationSharingGloballyEnabled by groupMonitorService.isLocationSharingGloballyEnabled.collectAsStateWithLifecycle()
 
         val otherMembersLocations by groupMonitorService.otherMembersLocations.collectAsStateWithLifecycle()
         val otherMembersProfiles by groupMonitorService.otherMembersProfiles.collectAsStateWithLifecycle()
@@ -300,7 +314,7 @@ class MainScreen(private val navController: NavHostController) {
 
         var currentUserModel by remember { mutableStateOf<UserModel?>(null) }
 
-        // NEW: State for instructional overlay visibility
+        // State for instructional overlay visibility
         var showInstructionsOverlay by remember { mutableStateOf(false) }
 
         // --- LaunchedEffects for initial setup and state observation ---
@@ -381,6 +395,13 @@ class MainScreen(private val navController: NavHostController) {
                 lifecycleOwner.lifecycle.removeObserver(observer)
                 fusedLocationClient.removeLocationUpdates(locationCallback)
                 Log.d("MainScreen", "Stopped local GPS location updates on dispose.")
+            }
+        }
+
+        // NEW: Dismiss map loading dialog when initial center is performed
+        LaunchedEffect(hasPerformedInitialCenter) {
+            if (hasPerformedInitialCenter) {
+                showMapLoadingDialog = false
             }
         }
 
@@ -684,7 +705,7 @@ class MainScreen(private val navController: NavHostController) {
                         contentColor = if (mapLockedToUserLocation) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
                     ) {
                         Icon(
-                            imageVector = if (mapLockedToUserLocation) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                            imageVector = Icons.Filled.Lock,
                             contentDescription = if (mapLockedToUserLocation) "Lock Map" else "Unlock Map"
                         )
                     }
@@ -813,7 +834,7 @@ class MainScreen(private val navController: NavHostController) {
                 }
             }
 
-            // NEW: Instructional Overlay
+            // Instructional Overlay
             AnimatedVisibility(
                 visible = showInstructionsOverlay,
                 enter = fadeIn(),
@@ -863,6 +884,42 @@ class MainScreen(private val navController: NavHostController) {
                     }
                 }
             }
+
+            // NEW: Map Loading Dialog
+            if (showMapLoadingDialog) {
+                AlertDialog(
+                    onDismissRequest = { /* This dialog is not dismissible by user interaction */ },
+                    properties = androidx.compose.ui.window.DialogProperties(
+                        dismissOnBackPress = false,
+                        dismissOnClickOutside = false
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth(0.8f) // Take 80% of width
+                        .wrapContentHeight()
+                        .shadow(8.dp, RoundedCornerShape(16.dp), clip = false) // Add shadow
+                ) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp), // Rounded corners
+                        colors = CardDefaults.cardColors(containerColor = LightCream) // LightCream background
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            CircularProgressIndicator(color = DarkBlue) // DarkBlue spinner
+                            Text(
+                                text = "Setting up the map... one moment",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = DarkBlue, // DarkBlue text
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -896,4 +953,3 @@ class MainScreen(private val navController: NavHostController) {
         Log.d("MainScreen", "Stopped local GPS location updates.")
     }
 }
-

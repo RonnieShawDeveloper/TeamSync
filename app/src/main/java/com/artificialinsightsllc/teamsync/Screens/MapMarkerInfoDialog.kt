@@ -269,7 +269,7 @@ fun MapMarkerInfoDialog(
 }
 
 // Helper function for geocoding a location to an address string (copied from MarkerInfoDialog)
-private suspend fun geocodeLocation(context: Context, latitude: Double, longitude: Double): String {
+internal suspend fun geocodeLocation(context: Context, latitude: Double, longitude: Double): String {
     return withContext(Dispatchers.IO) {
         val geocoder = Geocoder(context, Locale.getDefault())
         try {

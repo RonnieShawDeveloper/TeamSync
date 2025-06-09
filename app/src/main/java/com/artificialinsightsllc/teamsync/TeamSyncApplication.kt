@@ -64,6 +64,12 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
 
         markerMonitorService = MarkerMonitorService()
         groupMonitorService = GroupMonitorService(applicationContext, markerMonitorService = markerMonitorService)
+
+        // NEW: Call startMonitoring here, in the Application's onCreate.
+        // This ensures the GroupMonitorService's AuthStateListener is attached very early
+        // in the app's lifecycle, allowing it to reliably pick up Firebase Auth changes.
+        groupMonitorService.startMonitoring()
+        Log.d("TeamSyncApplication", "GroupMonitorService.startMonitoring() called from Application onCreate.")
     }
 
     override fun onTerminate() {

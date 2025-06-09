@@ -50,6 +50,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -78,7 +79,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -108,23 +108,27 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.maps.model.LatLng
-import id.zelory.compressor.Compressor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.storage.FirebaseStorage
-import com.yalantis.ucrop.UCrop
+import com.yalantis.ucrop.UCrop // RE-INTRODUCING UCROP
 import kotlinx.coroutines.tasks.await
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import android.provider.MediaStore // Import MediaStore for ACTION_IMAGE_CAPTURE Intent
+
 
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import java.io.IOException
+import coil.compose.rememberAsyncImagePainter
+// Removed TimeoutCancellationException and withTimeout as they are not in SignupScreen's pattern
 
 class AddMapMarkerScreen(private val navController: NavHostController) {
 
@@ -149,6 +153,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
 
         var selectedTabIndex by remember { mutableIntStateOf(0) } // 0 for Chat, 1 for Photo
         var chatMessage by remember { mutableStateOf("") }
+        // THIS WILL NOW HOLD THE URI SUPPLIED TO CAMERA, THEN THE CROPPED URI
         val capturedImageUriState = rememberSaveable(stateSaver = UriSaver) { mutableStateOf<Uri?>(null) }
         var photoMessage by remember { mutableStateOf("") }
         var isLoading by remember { mutableStateOf(false) }
@@ -183,24 +188,48 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
             }
         }
 
+        // RE-INTRODUCING UCROP LAUNCHER - EXACTLY FROM SIGNUP
         val cropResultLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
-                capturedImageUriState.value = UCrop.getOutput(result.data!!)
+                val croppedUri = UCrop.getOutput(result.data!!)
+                capturedImageUriState.value = croppedUri // Set to the cropped URI
                 Log.d("AddMapMarkerScreen", "Image cropped and captured: ${capturedImageUriState.value}")
             } else if (result.resultCode == UCrop.RESULT_ERROR) {
                 val cropError = UCrop.getError(result.data!!)
                 Log.e("AddMapMarkerScreen", "UCrop error: $cropError")
                 Toast.makeText(context, "Image cropping failed.", Toast.LENGTH_SHORT).show()
+                capturedImageUriState.value = null // Clear URI on crop error
+            } else {
+                Log.d("AddMapMarkerScreen", "UCrop cancelled or returned unexpected result: ${result.resultCode}")
+                capturedImageUriState.value = null // Clear URI on cancellation
+            }
+            // IMPORTANT: Delete the temporary photo file that the camera wrote to (from cacheDir)
+            // This file is the one `capturedImageUriState.value` held *before* UCrop.
+            // UCrop saves its output to `destinationUri`, which is a different file.
+            // The `capturedImageUriState.value` itself has been updated to the cropped URI,
+            // so we need the *original* file from the cacheDir.
+            // This is a subtle but important cleanup step.
+            val originalCameraTempFile = capturedImageUriState.value?.path?.let { File(it) }
+            if (originalCameraTempFile != null && originalCameraTempFile.exists() && originalCameraTempFile.name.startsWith("photo.jpg")) { // Check for "photo.jpg" name for safety
+                originalCameraTempFile.delete()
+                Log.d("AddMapMarkerScreen", "Deleted original camera temp file: ${originalCameraTempFile.absolutePath}")
             }
         }
 
+
+        // RE-INTRODUCING TakePicture LAUNCHER - EXACTLY FROM SIGNUP
         val takePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-            if (success) {
-                val destinationUri = Uri.fromFile(File(context.cacheDir, "cropped_marker_image_${UUID.randomUUID()}.jpg"))
+            // capturedImageUriState.value holds the URI we supplied to the camera
+            if (success && capturedImageUriState.value != null) {
+                Log.d("AddMapMarkerScreen", "Photo captured successfully to: ${capturedImageUriState.value}")
+                Log.d("AddMapMarkerScreen", "Location at photo capture: Lat=${currentLatLng?.latitude}, Lon=${currentLatLng?.longitude}, Bearing=${currentBearing}")
+
+                // UCrop destination file (also in cacheDir for exact replication)
+                val destinationUri = Uri.fromFile(File(context.cacheDir, "cropped_image.jpg"))
                 val options = UCrop.Options().apply {
-                    setCompressionQuality(70)
-                    setHideBottomControls(false)
-                    setFreeStyleCropEnabled(false)
+                    setCircleDimmedLayer(false) // Changed from true, as map markers are not typically circular
+                    setShowCropFrame(true) // Show crop frame for better UX
+                    setShowCropGrid(true) // Show crop grid
                     setToolbarTitle("Crop Photo Marker")
                     setToolbarColor(Color(0xFF0D47A1).toArgb())
                     setStatusBarColor(Color(0xFF0D47A1).toArgb())
@@ -208,18 +237,20 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                 }
 
                 // Ensure the parent directory for the cropped image exists
-                destinationUri.path?.let { path ->
-                    File(path).parentFile?.mkdirs()
-                }
+                destinationUri.path?.let { path -> File(path).parentFile?.mkdirs() }
 
+                // Launch UCrop with the URI supplied to the camera (capturedImageUriState.value)
                 val intent = UCrop.of(capturedImageUriState.value!!, destinationUri)
                     .withAspectRatio(1f, 1f)
                     .withMaxResultSize(512, 512)
                     .withOptions(options)
                     .getIntent(context)
                 cropResultLauncher.launch(intent)
+
             } else {
-                Toast.makeText(context, "Failed to capture photo.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Photo capture was cancelled or failed.", Toast.LENGTH_SHORT).show()
+                // If capture was cancelled, clear the URI state and delete the original temp file
+                capturedImageUriState.value?.path?.let { File(it).delete() }
                 capturedImageUriState.value = null
             }
         }
@@ -229,7 +260,54 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         ) { isGranted: Boolean ->
             hasCameraPermission = isGranted
             if (isGranted) {
-                launchCamera(context, takePhotoLauncher, capturedImageUriState)
+                // Prepare a URI for the camera to write the full-size image to
+                // EXACTLY as in SignupScreen: using "photo.jpg" in cacheDir
+                val photoFile = File(context.cacheDir, "photo.jpg")
+                try {
+                    // Ensure the file exists (will overwrite if it does)
+                    if (photoFile.exists()) {
+                        photoFile.delete() // Delete old file to prevent issues
+                    }
+                    val fileCreated = photoFile.createNewFile()
+                    if (!fileCreated) {
+                        Log.e("AddMapMarkerScreen", "Failed to create new file at: ${photoFile.absolutePath}")
+                        Toast.makeText(context, "Failed to create photo file.", Toast.LENGTH_LONG).show()
+                        capturedImageUriState.value = null
+                        return@rememberLauncherForActivityResult
+                    }
+
+
+                    val photoUri = FileProvider.getUriForFile(context, "${context.packageName}.provider", photoFile)
+                    capturedImageUriState.value = photoUri // Store this URI for the launcher callback
+
+                    val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                        putExtra(MediaStore.EXTRA_OUTPUT, photoUri)
+                        // Add read/write flags, though FileProvider and grantUriPermission are primary
+                        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+
+                    // Explicitly grant URI permissions for the camera app
+                    val cameraAppPackageName = cameraIntent.resolveActivity(context.packageManager)?.packageName
+                    if (cameraAppPackageName != null) {
+                        context.grantUriPermission(cameraAppPackageName, photoUri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        Log.d("AddMapMarkerScreen", "Explicitly granted URI permissions to $cameraAppPackageName for $photoUri")
+                    } else {
+                        Log.w("AddMapMarkerScreen", "Could not resolve camera app package name. Explicit URI permission grant skipped.")
+                    }
+
+                    Log.d("AddMapMarkerScreen", "Launching camera intent. Target URI: $photoUri. File exists: ${photoFile.exists()}, size: ${photoFile.length()} (before launch).")
+                    takePhotoLauncher.launch(photoUri) // Launch TakePicture with the URI
+
+                } catch (e: IOException) {
+                    Log.e("AddMapMarkerScreen", "Failed to create temp file for camera: ${e.message}", e)
+                    Toast.makeText(context, "Error setting up camera capture.", Toast.LENGTH_LONG).show()
+                    capturedImageUriState.value = null
+                } catch (e: Exception) {
+                    Log.e("AddMapMarkerScreen", "Unexpected error launching camera: ${e.message}", e)
+                    Toast.makeText(context, "Unexpected error setting up camera.", Toast.LENGTH_LONG).show()
+                    capturedImageUriState.value = null
+                }
             } else {
                 Toast.makeText(context, "Camera permission is required to take photos.", Toast.LENGTH_SHORT).show()
             }
@@ -253,6 +331,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
         DisposableEffect(lifecycleOwner, hasLocationPermission, selectedTabIndex) {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_START) {
+                    // Only start location updates if the tab is Photo or if currentLatLng is still null (for Chat initial fix)
                     if (hasLocationPermission && (selectedTabIndex == 1 || currentLatLng == null)) {
                         startLocationUpdates(fusedLocationClient, locationCallback)
                     }
@@ -414,40 +493,82 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                         .background(Color.LightGray),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (capturedImageUriState.value != null) {
-                                        // CRASHING LINE: BitmapFactory.decodeStream(context.contentResolver.openInputStream(capturedImageUriState.value!!)).asImageBitmap()
-                                        // This line expects the file to EXIST and be readable.
-                                        // The issue is that the camera app might not have written to it yet, or failed.
-                                        Image(
-                                            bitmap = BitmapFactory.decodeStream(context.contentResolver.openInputStream(capturedImageUriState.value!!)).asImageBitmap(),
-                                            contentDescription = "Captured Photo",
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        Image(
-                                            painter = painterResource(id = R.drawable.no_image),
-                                            contentDescription = "No Image Placeholder",
-                                            modifier = Modifier.size(120.dp)
-                                        )
-                                    }
-                                    FloatingActionButton(
-                                        onClick = {
-                                            if (hasCameraPermission) {
-                                                launchCamera(context, takePhotoLauncher, capturedImageUriState)
-                                            } else {
-                                                if (ActivityCompat.shouldShowRequestPermissionRationale(context as Activity, Manifest.permission.CAMERA)) {
-                                                    generalPermissionRationaleText = "Camera access is needed to take a photo for your map marker. Please grant this permission."
-                                                    showGeneralPermissionRationaleDialog = true
+                                    // Coil's rememberAsyncImagePainter for robust loading
+                                    Image(
+                                        painter = rememberAsyncImagePainter(
+                                            model = capturedImageUriState.value,
+                                            error = painterResource(id = R.drawable.no_image) // Fallback on error or null
+                                        ),
+                                        contentDescription = "Captured Photo Preview",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+
+                                    // Conditional visibility for Take Photo FAB and Delete FAB
+                                    if (capturedImageUriState.value == null) {
+                                        // Show Take Photo FAB if no photo is taken
+                                        FloatingActionButton(
+                                            onClick = {
+                                                if (hasCameraPermission) {
+                                                    // Launch TakePicture intent
+                                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA) // Request permission if not already granted, then launch camera
                                                 } else {
-                                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                                    if (ActivityCompat.shouldShowRequestPermissionRationale(context as Activity, Manifest.permission.CAMERA)) {
+                                                        generalPermissionRationaleText = "Camera access is needed to take a photo for your map marker. Please grant this permission."
+                                                        showGeneralPermissionRationaleDialog = true
+                                                    } else {
+                                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                                    }
                                                 }
-                                            }
-                                        },
-                                        modifier = Modifier.align(Alignment.Center)
-                                    ) {
-                                        Icon(Icons.Filled.CameraAlt, "Take Photo")
+                                            },
+                                            modifier = Modifier.align(Alignment.Center)
+                                        ) {
+                                            Icon(Icons.Filled.CameraAlt, "Take Photo")
+                                        }
+                                    } else {
+                                        // Show Delete FAB if a photo is present
+                                        FloatingActionButton(
+                                            onClick = {
+                                                // Delete the temporary file from disk
+                                                capturedImageUriState.value?.path?.let { filePath ->
+                                                    val fileToDelete = File(filePath)
+                                                    if (fileToDelete.exists()) {
+                                                        fileToDelete.delete()
+                                                        Log.d("AddMapMarkerScreen", "Deleted temporary photo file: $filePath")
+                                                    }
+                                                }
+                                                capturedImageUriState.value = null // Clear the URI state
+                                                photoMessage = "" // Clear associated message
+                                                Toast.makeText(context, "Photo deleted.", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd) // Position in top right corner
+                                                .padding(8.dp) // Add some padding
+                                                .size(40.dp), // Make it smaller
+                                            containerColor = MaterialTheme.colorScheme.error // Red color for delete
+                                        ) {
+                                            Icon(Icons.Filled.Delete, "Delete Photo", tint = Color.White)
+                                        }
                                     }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                // Location status text
+                                if (currentLatLng == null) {
+                                    Text(
+                                        text = "Acquiring precise location (for geotagging)...",
+                                        color = Color.Gray.copy(alpha = 0.7f),
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Location acquired.",
+                                        color = Color.Green.copy(alpha = 0.7f),
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
                                 }
                                 Spacer(Modifier.height(8.dp))
                                 OutlinedTextField(
@@ -486,10 +607,18 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                         isLoading = false
                                         return@Button
                                     }
-                                    if (selectedTabIndex == 1 && !hasLocationPermission) {
-                                        Toast.makeText(context, "Location permission is required to post photo markers with geotagging.", Toast.LENGTH_LONG).show()
-                                        isLoading = false
-                                        return@Button
+                                    // Consolidated location/photo validation for "Post to Map"
+                                    if (selectedTabIndex == 1) { // Photo Marker specific checks
+                                        if (capturedImageUriState.value == null) {
+                                            Toast.makeText(context, "Please take a photo first.", Toast.LENGTH_SHORT).show()
+                                            isLoading = false
+                                            return@Button
+                                        }
+                                        if (currentLatLng == null) {
+                                            Toast.makeText(context, "Waiting for precise location data. Please try again.", Toast.LENGTH_LONG).show()
+                                            isLoading = false
+                                            return@Button
+                                        }
                                     }
 
 
@@ -504,14 +633,16 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                                     isLoading = false
                                                     return@launch
                                                 }
+                                                // Log location for chat marker too for verification
+                                                Log.d("AddMapMarkerScreen", "Chat Marker Location: Lat=${currentLatLng?.latitude}, Lon=${currentLatLng?.longitude}")
                                                 markerToSave = MapMarker(
                                                     id = newMarkerId,
                                                     groupId = groupId,
                                                     userId = userId,
                                                     markerType = MapMarkerType.CHAT,
                                                     message = chatMessage,
-                                                    latitude = currentLatLng?.latitude ?: 0.0,
-                                                    longitude = currentLatLng?.longitude ?: 0.0,
+                                                    latitude = currentLatLng?.latitude ?: 0.0, // Use acquired location or default
+                                                    longitude = currentLatLng?.longitude ?: 0.0, // Use acquired location or default
                                                     timestamp = System.currentTimeMillis()
                                                 )
                                                 firestoreService.addMapMarker(markerToSave).onSuccess {
@@ -522,21 +653,18 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                                 }
 
                                             } else { // Photo Marker
-                                                if (capturedImageUriState.value == null) {
-                                                    Toast.makeText(context, "Please take a photo first.", Toast.LENGTH_SHORT).show()
-                                                    isLoading = false
-                                                    return@launch
-                                                }
-                                                if (currentLatLng == null) {
-                                                    Toast.makeText(context, "Waiting for location data. Please try again.", Toast.LENGTH_SHORT).show()
-                                                    isLoading = false
-                                                    return@launch
-                                                }
+                                                // Log location for photo marker
+                                                Log.d("AddMapMarkerScreen", "Photo Marker Location (final check): Lat=${currentLatLng?.latitude}, Lon=${currentLatLng?.longitude}, Bearing=${currentBearing}")
 
                                                 // Upload photo to Firebase Storage
                                                 val photoRef = firebaseStorage.reference.child("map_markers/${groupId}/${newMarkerId}.jpg")
+                                                // Using capturedImageUriState.value (which now points to the cropped file in cacheDir)
                                                 val uploadResult = photoRef.putFile(capturedImageUriState.value!!).await()
                                                 val photoUrl = uploadResult.storage.downloadUrl.await().toString()
+
+                                                // Clean up the temporary cropped image file AFTER successful upload
+                                                capturedImageUriState.value?.path?.let { File(it).delete() }
+
 
                                                 markerToSave = MapMarker(
                                                     id = newMarkerId,
@@ -548,7 +676,7 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                                     latitude = currentLatLng!!.latitude,
                                                     longitude = currentLatLng!!.longitude,
                                                     timestamp = System.currentTimeMillis(),
-                                                    cameraBearing = currentBearing
+                                                    cameraBearing = currentBearing // Pass the captured bearing
                                                 )
                                                 firestoreService.addMapMarker(markerToSave).onSuccess {
                                                     Toast.makeText(context, "Photo marker posted!", Toast.LENGTH_SHORT).show()
@@ -570,7 +698,11 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                                     .height(50.dp),
                                 shape = RoundedCornerShape(24.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D47A1)),
-                                enabled = !isLoading
+                                // Disable button if no photo or no location (for photo marker)
+                                enabled = !isLoading && (
+                                        (selectedTabIndex == 0 && chatMessage.isNotBlank()) ||
+                                                (selectedTabIndex == 1 && capturedImageUriState.value != null && currentLatLng != null)
+                                        )
                             ) {
                                 if (isLoading) {
                                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
@@ -639,22 +771,5 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
     ) {
         fusedLocationClient.removeLocationUpdates(locationCallback)
         Log.d("AddMapMarkerScreen", "Stopped location updates for marker creation.")
-    }
-
-    private fun launchCamera(
-        context: Context,
-        takePhotoLauncher: ActivityResultLauncher<Uri>,
-        outUriState: MutableState<Uri?>
-    ) {
-        val photoFile = File(context.filesDir, "temp_marker_photo_${UUID.randomUUID()}.jpg")
-
-        // CRITICAL FIX: Ensure the parent directory exists before getting the URI for writing
-        // This is the specific line that should resolve the ENOENT during camera launch attempt
-        photoFile.parentFile?.mkdirs() // Ensure parent directories are created if they don't exist
-
-        val photoUri = FileProvider.getUriForFile(context, "${context.packageName}.provider", photoFile)
-
-        outUriState.value = photoUri
-        takePhotoLauncher.launch(photoUri)
     }
 }

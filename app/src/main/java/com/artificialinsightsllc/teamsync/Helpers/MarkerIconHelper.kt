@@ -48,17 +48,19 @@ object MarkerIconHelper {
      * @param profileImageUrl The URL of the user's profile image.
      * @param defaultProfileResId A drawable resource ID for a default profile image.
      * @param markerPinResId An optional drawable resource ID for the base pin shape.
+     * @param isLocationStale A boolean indicating if the location data is considered stale.
      */
     @Composable
     fun rememberUserMarkerIcon(
         profileImageUrl: String?,
         @DrawableRes defaultProfileResId: Int, // e.g., R.drawable.default_profile_pic
-        @DrawableRes markerPinResId: Int? = null // e.g., R.drawable.pin_base_shape
+        @DrawableRes markerPinResId: Int? = null, // e.g., R.drawable.pin_base_shape
+        isLocationStale: Boolean = false // NEW PARAMETER
     ): BitmapDescriptor? {
         val context = LocalContext.current
         var bitmapDescriptor by remember { mutableStateOf<BitmapDescriptor?>(null) }
 
-        LaunchedEffect(profileImageUrl, defaultProfileResId, markerPinResId) {
+        LaunchedEffect(profileImageUrl, defaultProfileResId, markerPinResId, isLocationStale) { // Include isLocationStale in key
             val imageLoader = ImageLoader(context)
             val profileBitmapSize = 96 // Target size for the profile image part of the marker
             val pinBaseSize = 120 // Target size for the overall marker bitmap
@@ -103,6 +105,16 @@ object MarkerIconHelper {
             val profileX = (pinBaseSize - profileBitmapToDraw.width) / 2f
             val profileY = 2f // A small offset from the top (adjust this based on your pin design)
             canvas.drawBitmap(profileBitmapToDraw, profileX, profileY, null)
+
+            // 3. NEW: Draw the ic_no_service overlay if location is stale
+            if (isLocationStale) {
+                val noServiceDrawable = ContextCompat.getDrawable(context, R.drawable.ic_no_service) // Assumes R.drawable.ic_no_service exists
+                noServiceDrawable?.let {
+                    // It's designed to overlay exactly centered and sized to pinBaseSize
+                    it.setBounds(0, 0, pinBaseSize, pinBaseSize) // Fill the entire marker area
+                    it.draw(canvas)
+                }
+            }
 
             bitmapDescriptor = BitmapDescriptorFactory.fromBitmap(finalMarkerBitmap)
         }

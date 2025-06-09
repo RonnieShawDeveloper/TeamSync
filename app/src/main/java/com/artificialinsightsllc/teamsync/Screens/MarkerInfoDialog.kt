@@ -24,7 +24,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ListAlt
+import androidx.compose.material.icons.filled.ListAlt // Icon for text-based report
+import androidx.compose.material.icons.filled.Timeline // Icon for map-based history
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +34,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog // Required for AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,12 +68,12 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.util.Locale
 import com.artificialinsightsllc.teamsync.Navigation.NavRoutes
-import androidx.navigation.NavHostController // NEW IMPORT for NavHostController
+import androidx.navigation.NavHostController
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MarkerInfoDialog(
-    navController: NavHostController, // NEW: Added navController parameter
+    navController: NavHostController,
     profilePhotoUrl: String?,
     title: String,
     latLng: LatLng?,
@@ -88,6 +91,8 @@ fun MarkerInfoDialog(
 
     val DarkBlue = Color(0xFF0D47A1)
 
+    // State for the time range selection dialog (for Travel History)
+    var showTimeRangeDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(timestamp, latLng) {
         launch {
@@ -98,7 +103,8 @@ fun MarkerInfoDialog(
         }
 
         if (latLng != null) {
-            currentAddress = geocodeLocation(context, latLng.latitude, latLng.longitude)
+            // Call geocodeLocation via the new LocationUtils object
+            currentAddress = LocationUtils.geocodeLocation(context, latLng.latitude, latLng.longitude)
         } else {
             currentAddress = null
         }
@@ -114,22 +120,28 @@ fun MarkerInfoDialog(
         },
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-        containerColor = Color.Transparent,
+        containerColor = Color.Transparent, // Makes the background image visible
         modifier = Modifier.fillMaxWidth()
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .wrapContentHeight()
-                .background(Color.Transparent)
+                .background(Color.Transparent) // Ensures the background image shows through
         ) {
+            // Background Image for the Modal Bottom Sheet
             Image(
                 painter = painterResource(id = R.drawable.background1),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .matchParentSize()
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .clip(
+                        RoundedCornerShape(
+                            topStart = 16.dp,
+                            topEnd = 16.dp
+                        )
+                    ) // Clip to match sheet shape
             )
 
             Column(
@@ -195,7 +207,12 @@ fun MarkerInfoDialog(
                 // Speed
                 speed?.let {
                     Text(
-                        text = "Speed: ${String.format("%.1f", UnitConverter.metersPerSecondToMilesPerHour(it))} MPH",
+                        text = "Speed: ${
+                            String.format(
+                                "%.1f",
+                                UnitConverter.metersPerSecondToMilesPerHour(it)
+                            )
+                        } MPH",
                         fontSize = 14.sp,
                         color = DarkBlue.copy(alpha = 0.8f),
                         textAlign = TextAlign.Center,
@@ -216,23 +233,29 @@ fun MarkerInfoDialog(
 
                 Spacer(Modifier.height(16.dp))
 
+                // Row for action buttons (4 buttons)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly, // Evenly spaced for 4 buttons
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Private Chat Button
+                    val FAB_SIZE = 60.dp // Size of the circular buttons
+                    val ICON_SIZE = 40.dp // Size of the icons inside buttons
+
+                    // 1. Private Chat Button
                     Button(
                         onClick = {
-                            Toast.makeText(context, "Private Chat functionality coming soon!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                "Private Chat functionality coming soon!",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         },
                         modifier = Modifier
-                            .weight(1f)
-                            .height(80.dp)
-                            .shadow(8.dp, CircleShape, clip = false)
-                            .padding(horizontal = 4.dp),
+                            .size(FAB_SIZE)
+                            .shadow(4.dp, CircleShape, clip = false),
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = DarkBlue)
                     ) {
@@ -240,94 +263,245 @@ fun MarkerInfoDialog(
                             imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "Private Chat",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(ICON_SIZE)
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // View Travel Report Button
+                    // 2. Travel Report (Text) Button
                     Button(
                         onClick = {
                             coroutineScope.launch { sheetState.hide() }.invokeOnCompletion {
                                 onDismissRequest() // Dismiss the dialog immediately after hiding
                                 if (personUserId != null) {
-                                    Log.d("MarkerInfoDialog", "Navigating to travel report for userId: $personUserId")
-                                    // Navigate using the passed navController
-                                    navController.navigate(NavRoutes.TRAVEL_REPORT.replace("{userId}", personUserId))
+                                    Log.d(
+                                        "MarkerInfoDialog",
+                                        "Navigating to text travel report for userId: $personUserId"
+                                    )
+                                    // Default to 24 hours for the text report
+                                    navController.navigate(
+                                        NavRoutes.TRAVEL_REPORT.replace(
+                                            "{userId}",
+                                            personUserId
+                                        ).replace(
+                                            "{timeRangeMillis}",
+                                            (24 * 60 * 60 * 1000L).toString()
+                                        )
+                                    )
                                 } else {
-                                    Toast.makeText(context, "Cannot view report: User ID not available.", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        context,
+                                        "Cannot view report: User ID not available.",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             }
                         },
                         enabled = personUserId != null,
                         modifier = Modifier
-                            .weight(1f)
-                            .height(80.dp)
-                            .shadow(8.dp, CircleShape, clip = false)
-                            .padding(horizontal = 4.dp),
+                            .size(FAB_SIZE)
+                            .shadow(4.dp, CircleShape, clip = false),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary) // Primary color for distinction
                     ) {
                         Icon(
                             imageVector = Icons.Filled.ListAlt,
                             contentDescription = "View Report",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(ICON_SIZE)
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    // 3. Travel History (Map Plot) Button
+                    Button(
+                        onClick = {
+                            if (personUserId != null) {
+                                showTimeRangeDialog = true // Show time range selection dialog
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    "Cannot view history: User ID not available.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        },
+                        enabled = personUserId != null,
+                        modifier = Modifier
+                            .size(FAB_SIZE)
+                            .shadow(4.dp, CircleShape, clip = false),
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary) // Secondary color for distinction
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Timeline, // Timeline icon for history
+                            contentDescription = "View Travel History",
+                            tint = Color.White,
+                            modifier = Modifier.size(ICON_SIZE)
+                        )
+                    }
 
-                    // Close Button
+                    // 4. Close Button
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                sheetState.hide()
+                                sheetState.hide() // Hide the modal bottom sheet
                             }.invokeOnCompletion {
-                                onDismissRequest()
+                                onDismissRequest() // Call the original dismiss request callback
                             }
                         },
                         modifier = Modifier
-                            .weight(1f)
-                            .height(80.dp)
-                            .shadow(8.dp, CircleShape, clip = false)
-                            .padding(horizontal = 4.dp),
+                            .size(FAB_SIZE)
+                            .shadow(4.dp, CircleShape, clip = false),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000)) // Maroon color for close
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Close",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(ICON_SIZE)
                         )
                     }
                 }
             }
         }
-    }
+
+        // NEW: Time Range Selection Dialog called as a top-level composable
+        if (showTimeRangeDialog) {
+            // Correctly calling the top-level composable
+            TimeRangeSelectionDialog(
+                onDismissRequest = { showTimeRangeDialog = false },
+                onTimeRangeSelected = { selectedTimeRangeMillis: Long ->
+                    coroutineScope.launch { sheetState.hide() }.invokeOnCompletion {
+                        onDismissRequest() // Dismiss the main MarkerInfoDialog
+                        showTimeRangeDialog = false // Dismiss the time range dialog itself
+                        navController.navigate(
+                            NavRoutes.TRAVEL_REPORT
+                                .replace("{userId}", personUserId!!)
+                                .replace("{timeRangeMillis}", selectedTimeRangeMillis.toString())
+                        )
+                    }
+                }
+            )
+        }
+    } // End of ModalBottomSheet for MarkerInfoDialog
+} // End of MarkerInfoDialog composable function
+
+
+// ---
+// TOP-LEVEL COMPOSABLES AND FUNCTIONS START HERE
+// These functions are outside of the MarkerInfoDialog composable.
+// ---
+
+/**
+ * A dialog composable for selecting a time range for travel history.
+ * This is a top-level composable function.
+ *
+ * @param onDismissRequest Callback invoked when the dialog is dismissed (e.g., by clicking outside or cancel).
+ * @param onTimeRangeSelected Callback invoked when a time range button is selected, providing the duration in milliseconds.
+ */
+@Composable
+fun TimeRangeSelectionDialog(
+    onDismissRequest: () -> Unit,
+    onTimeRangeSelected: (Long) -> Unit
+) {
+    // These colors should ideally come from a theme, but defined locally for now if not imported.
+    val DarkBlue = Color(0xFF0D47A1)
+    val LightCream = Color(0xFFFFFDD0)
+
+    val timeRanges = listOf(
+        "Last Hour" to 1 * 60 * 60 * 1000L,
+        "Last 3 Hours" to 3 * 60 * 60 * 1000L,
+        "Last 6 Hours" to 6 * 60 * 60 * 1000L,
+        "Last 12 Hours" to 12 * 60 * 60 * 1000L,
+        "Last 24 Hours" to 24 * 60 * 60 * 1000L
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = {
+            Text(
+                "Select History Time Range",
+                color = DarkBlue,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                timeRanges.forEach { (label, duration) ->
+                    Button(
+                        onClick = { onTimeRangeSelected(duration) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkBlue)
+                    ) {
+                        Text(label, color = Color.White)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            // No confirm button needed, selection triggers action
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) {
+                Text("Cancel", color = DarkBlue)
+            }
+        },
+        containerColor = Color.White.copy(alpha = 0.95f), // Slightly transparent white background
+        shape = RoundedCornerShape(16.dp), // Rounded corners for the dialog
+        modifier = Modifier.shadow(
+            8.dp,
+            RoundedCornerShape(16.dp)
+        ) // Shadow for floating effect
+    )
 }
 
-private suspend fun geocodeLocation(context: Context, latitude: Double, longitude: Double): String {
-    return withContext(Dispatchers.IO) {
-        val geocoder = Geocoder(context, Locale.getDefault())
-        try {
-            if (!Geocoder.isPresent()) {
-                Log.e("Geocoding", "Geocoder is not present on this device.")
-                return@withContext "Address lookup failed (Geocoder not available)"
+/**
+ * An object containing utility functions related to location services.
+ * This helps to avoid naming conflicts for common utility functions.
+ */
+object LocationUtils {
+    /**
+     * Helper function for geocoding a given latitude and longitude into a human-readable address.
+     * This is a suspend function that performs an IO operation.
+     *
+     * @param context The Android context, typically LocalContext.current.
+     * @param latitude The latitude of the location.
+     * @param longitude The longitude of the location.
+     * @return The formatted address string, or an error message if geocoding fails.
+     */
+    suspend fun geocodeLocation(
+        context: Context,
+        latitude: Double,
+        longitude: Double
+    ): String {
+        return withContext(Dispatchers.IO) {
+            val geocoder = Geocoder(context, Locale.getDefault())
+            try {
+                if (!Geocoder.isPresent()) {
+                    Log.e("Geocoding", "Geocoder is not present on this device.")
+                    return@withContext "Address lookup failed (Geocoder not available)"
+                }
+                val addresses = geocoder.getFromLocation(latitude, longitude, 1)
+                addresses?.firstOrNull()?.getAddressLine(0) ?: "Address not found"
+            } catch (e: IOException) {
+                Log.e("Geocoding", "Geocoding failed for $latitude, $longitude: ${e.message}")
+                "Address lookup failed (Network/IO error)"
+            } catch (e: IllegalArgumentException) {
+                Log.e(
+                    "Geocoding",
+                    "Invalid LatLng for geocoding: $latitude, $longitude: ${e.message}"
+                )
+                "Invalid location (Coordinates error)"
+            } catch (e: Exception) {
+                Log.e(
+                    "Geocoding",
+                    "Unexpected geocoding error for $latitude, $longitude: ${e.message}"
+                )
+                "Address lookup failed (Unknown error)"
             }
-            val addresses = geocoder.getFromLocation(latitude, longitude, 1)
-            addresses?.firstOrNull()?.getAddressLine(0) ?: "Address not found"
-        } catch (e: IOException) {
-            Log.e("Geocoding", "Geocoding failed for $latitude, $longitude: ${e.message}")
-            "Address lookup failed (Network/IO error)"
-        } catch (e: IllegalArgumentException) {
-            Log.e("Geocoding", "Invalid LatLng for geocoding: $latitude, $longitude: ${e.message}")
-            "Invalid location (Coordinates error)"
-        } catch (e: Exception) {
-            Log.e("Geocoding", "Unexpected geocoding error for $latitude, $longitude: ${e.message}")
-            "Address lookup failed (Unknown error)"
         }
     }
 }

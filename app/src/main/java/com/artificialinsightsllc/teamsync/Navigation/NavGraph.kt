@@ -59,16 +59,20 @@ fun AppNavGraph(navController: NavHostController) {
         }
         composable(
             route = NavRoutes.TRAVEL_REPORT,
-            arguments = listOf(navArgument("userId") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("userId") { type = NavType.StringType },
+                navArgument("timeRangeMillis") { type = NavType.LongType } // UPDATED: Added timeRangeMillis argument
+            )
         ) { backStackEntry ->
             val userId = backStackEntry.arguments?.getString("userId")
-            if (userId != null) {
-                TravelReportScreen(navController, userId).Content()
+            val timeRangeMillis = backStackEntry.arguments?.getLong("timeRangeMillis")
+
+            if (userId != null && timeRangeMillis != null) {
+                TravelReportScreen(navController, userId, timeRangeMillis).Content()
             } else {
-                Log.e("AppNavGraph", "TravelReportScreen: userId argument is null.")
+                Log.e("AppNavGraph", "TravelReportScreen: userId or timeRangeMillis argument is null.")
                 navController.popBackStack()
             }
         }
     }
 }
-

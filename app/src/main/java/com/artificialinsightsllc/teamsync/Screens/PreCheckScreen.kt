@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBars // Import navigationBars
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -383,12 +384,14 @@ class PreCheckScreen(private val navController: NavHostController) {
         }
 
         // --- LaunchedEffect to automatically proceed when all permissions are granted ---
+        // This is the trigger for navigation to MAIN screen
         LaunchedEffect(allPermissionsFullyGranted, initialUserCheckDone) {
             // Only proceed if all permissions are granted AND we've finished the initial user check
             if (allPermissionsFullyGranted && initialUserCheckDone) {
                 Log.d("PreCheckScreen", "All permissions now granted (triggered by state change). Auto-navigating.")
-                groupMonitorService.setUiPermissionsGranted(true)
-                groupMonitorService.startMonitoring(initialUserSelectedGroupId)
+                // No longer calling groupMonitorService.startMonitoring here.
+                // It's called earlier in TeamSyncApplication.onCreate().
+                groupMonitorService.setUiPermissionsGranted(true) // Notify GroupMonitorService that permissions are granted for UI
                 navController.navigate(NavRoutes.MAIN) {
                     popUpTo(NavRoutes.PRE_CHECK) { inclusive = true }
                 }
@@ -423,19 +426,20 @@ class PreCheckScreen(private val navController: NavHostController) {
                         modifier = Modifier.fillMaxWidth() // Fill width for centering
                     )
                 }
-            } else if (!allPermissionsFullyGranted){ // This else block will ONLY be composed and rendered if showLoadingIndicator is false
+            } else if (!allPermissionsFullyGranted) { // This else block will ONLY be composed and rendered if showLoadingIndicator is false
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .padding(24.dp),
+                        .padding(24.dp)
+                        .padding(WindowInsets.systemBars.asPaddingValues()), // Apply system bars padding
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
                         text = "Security Permissions",
                         fontSize = 32.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.Blue,
+                        color = DarkBlue, // Changed to DarkBlue for consistency
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(bottom = 24.dp)
                     )
@@ -448,6 +452,7 @@ class PreCheckScreen(private val navController: NavHostController) {
                         val buttonEnabled = when (permInfo.type) {
                             PermissionType.LOCATION_BACKGROUND -> permissionStates.value[PermissionType.LOCATION_FOREGROUND] == true
                             PermissionType.BATTERY_OPTIMIZATION -> true // Always enabled, just launches system settings
+                            // FIX: Added 'else' branch to the 'when' expression to make it exhaustive
                             else -> true
                         }
 
@@ -533,7 +538,8 @@ class PreCheckScreen(private val navController: NavHostController) {
                                         }
                                     } else { // Already granted manifest permission
                                         alertDialogTitle = "${permInfo.title} is already granted!"
-                                        alertDialogMessage = "This permission is already set to '${permInfo.direction}'. You do not need to take any action."
+                                        // Removed `direction` from the `else` branch message as it's not a generic status string for granted permissions.
+                                        alertDialogMessage = "This permission is already granted. You do not need to take any action."
                                         alertDialogConfirmAction = null
                                         showAlertDialog = true
                                     }

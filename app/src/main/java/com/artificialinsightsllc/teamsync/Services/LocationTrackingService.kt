@@ -45,6 +45,7 @@ class LocationTrackingService : Service() {
 
     private var activeGroupMemberId: String? = null
     private var isCurrentlyTracking: Boolean = false // Internal state to track if updates are active
+    private var currentActiveTrackingGroupId: String? = null // NEW: Field to store the active group ID for tracking
 
     companion object {
         const val CHANNEL_ID = "TeamSyncLocationChannel"
@@ -55,6 +56,7 @@ class LocationTrackingService : Service() {
         const val EXTRA_LOCATION_INTERVAL = "extra_location_interval"
         const val EXTRA_IS_SHARING_LOCATION = "extra_is_sharing_location"
         const val EXTRA_ACTIVE_GROUP_MEMBER_ID = "extra_active_group_member_id"
+        const val EXTRA_ACTIVE_TRACKING_GROUP_ID = "extra_active_tracking_group_id" // NEW: For the Locations model field
     }
 
     override fun onCreate() {
@@ -100,27 +102,28 @@ class LocationTrackingService : Service() {
                 val locationInterval = intent.getLongExtra(EXTRA_LOCATION_INTERVAL, 300000L)
                 val isSharingLocationRequested = intent.getBooleanExtra(EXTRA_IS_SHARING_LOCATION, true)
                 val memberIdFromIntent = intent.getStringExtra(EXTRA_ACTIVE_GROUP_MEMBER_ID)
+                val activeTrackingGroupIdFromIntent = intent.getStringExtra(EXTRA_ACTIVE_TRACKING_GROUP_ID) // NEW: Get activeTrackingGroupId
 
-                Log.d("LocationService", "onStartCommand received activeGroupMemberId: $memberIdFromIntent")
-                Log.d("LocationService", "Handling action: ${intent?.action}. Sharing Requested: $isSharingLocationRequested, Interval: $locationInterval. Member ID: $memberIdFromIntent")
+                Log.d("LocationService", "onStartCommand received activeGroupMemberId: $memberIdFromIntent, activeTrackingGroupId: $activeTrackingGroupIdFromIntent")
+                Log.d("LocationService", "Handling action: ${intent?.action}. Sharing Requested: $isSharingLocationRequested, Interval: $locationInterval. Member ID: $memberIdFromIntent, Tracking Group ID: $activeTrackingGroupIdFromIntent")
 
                 // Check for location permission at the point of starting updates
                 val hasFineLocationPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-                // Get current actual state from TeamSyncApplication's observed flows
+                // Get current actual state from TeamSyncApplication's observed flows (useful for avoiding redundant restarts)
                 val (actualServiceIsRunning, actualTrackingInterval, actualTrackingMemberId) = app.locationServiceRunningState.value
 
                 // Decide if we should actually start/continue tracking location
                 if (isSharingLocationRequested && hasFineLocationPermission && memberIdFromIntent != null) {
-                    // FIX: Access currentTrackingInterval and currentTrackingMemberId from the triple
-                    if (!isCurrentlyTracking || locationInterval != actualTrackingInterval || memberIdFromIntent != actualTrackingMemberId) {
-                        // Only restart updates if tracking state or interval has changed
+                    // Only restart updates if tracking state, interval, or active group has changed
+                    if (!isCurrentlyTracking || locationInterval != actualTrackingInterval || memberIdFromIntent != actualTrackingMemberId || activeTrackingGroupIdFromIntent != currentActiveTrackingGroupId) {
                         stopLocationUpdates() // Stop existing to apply new settings
                         startLocationUpdates(locationInterval)
                         activeGroupMemberId = memberIdFromIntent
+                        currentActiveTrackingGroupId = activeTrackingGroupIdFromIntent // NEW: Set currentActiveTrackingGroupId
                         isCurrentlyTracking = true
                         app.setLocationServiceState(true, locationInterval, activeGroupMemberId)
-                        Log.d("LocationService", "Location updates STARTED/RESTARTED. Interval: $locationInterval, Member ID: $activeGroupMemberId")
+                        Log.d("LocationService", "Location updates STARTED/RESTARTED. Interval: $locationInterval, Member ID: $activeGroupMemberId, Tracking Group ID: $currentActiveTrackingGroupId")
                     } else {
                         Log.d("LocationService", "Location updates already running with same settings. No action needed.")
                     }
@@ -128,21 +131,18 @@ class LocationTrackingService : Service() {
                     // Conditions not met for tracking. Stop updates and remove notification.
                     stopLocationUpdates()
                     activeGroupMemberId = null
+                    currentActiveTrackingGroupId = null // NEW: Clear active tracking group ID
                     isCurrentlyTracking = false
                     app.setLocationServiceState(false, 0L, null)
                     stopForeground(true) // Remove notification
                     Log.d("LocationService", "Location updates STOPPED and notification removed via stopForeground(true). Conditions: (sharing=$isSharingLocationRequested, hasPermission=$hasFineLocationPermission, memberIdIsNull=${memberIdFromIntent == null}).")
-                    // If the service is explicitly told to stop tracking, it likely has no other purpose
-                    // and should stop itself to release resources.
-                    // The GroupMonitorService is now designed to send ACTION_STOP_SERVICE for full shutdown.
-                    // So, for ACTION_UPDATE_TRACKING_STATE, we just stop updates and foreground,
-                    // relying on GMS to send ACTION_STOP_SERVICE when process needs to terminate.
                 }
             }
             ACTION_STOP_SERVICE -> {
                 Log.d("LocationService", "Handling ACTION_STOP_SERVICE. Stopping service completely.")
                 stopLocationUpdates()
                 activeGroupMemberId = null
+                currentActiveTrackingGroupId = null // NEW: Clear active tracking group ID
                 isCurrentlyTracking = false
                 stopForeground(true) // Ensure notification is removed
                 stopSelf() // Stop the service process
@@ -162,6 +162,7 @@ class LocationTrackingService : Service() {
         stopLocationUpdates()
         serviceScope.cancel()
         activeGroupMemberId = null
+        currentActiveTrackingGroupId = null // NEW: Clear active tracking group ID
         isCurrentlyTracking = false
         // Ensure state is updated on destruction, especially if it was killed by system
         (application as TeamSyncApplication).setLocationServiceState(false, 0L, null)
@@ -205,12 +206,12 @@ class LocationTrackingService : Service() {
                 locationResult.lastLocation?.let { location ->
                     Log.d("LocationService", "Location received: ${location.latitude}, ${location.longitude}")
 
-                    // Check if current user is authenticated and if an active group member ID is set
+                    // Check if current user is authenticated and if an active group member ID and tracking group ID are set
                     // and if tracking is actually enabled based on internal state
-                    if (auth.currentUser != null && activeGroupMemberId != null && isCurrentlyTracking) {
-                        sendLocationAndStatusToFirestore(location, activeGroupMemberId!!)
+                    if (auth.currentUser != null && activeGroupMemberId != null && currentActiveTrackingGroupId != null && isCurrentlyTracking) {
+                        sendLocationAndStatusToFirestore(location, activeGroupMemberId!!, currentActiveTrackingGroupId!!) // NEW: Pass currentActiveTrackingGroupId
                     } else {
-                        Log.d("LocationService", "Location received, but not sending to Firestore. (Auth: ${auth.currentUser?.uid != null}, MemberId: ${activeGroupMemberId}, Tracking: $isCurrentlyTracking).")
+                        Log.d("LocationService", "Location received, but not sending to Firestore. (Auth: ${auth.currentUser?.uid != null}, MemberId: ${activeGroupMemberId}, TrackingGroupId: $currentActiveTrackingGroupId, Tracking: $isCurrentlyTracking).")
                     }
                 }
             }
@@ -246,8 +247,11 @@ class LocationTrackingService : Service() {
     /**
      * Sends location, battery status, and app status to Firestore.
      * This is the authoritative update point for the user's current status.
+     * @param location The current location data.
+     * @param memberId The Firestore document ID of the active GroupMembers record.
+     * @param activeTrackingGroupId The ID of the group the user is currently actively tracking for.
      */
-    private fun sendLocationAndStatusToFirestore(location: Location, memberId: String) {
+    private fun sendLocationAndStatusToFirestore(location: Location, memberId: String, activeTrackingGroupId: String) { // NEW: Add activeTrackingGroupId parameter
         val userId = auth.currentUser?.uid
         if (userId != null) {
             val (batteryLevel, chargingStatus) = BatteryInfoHelper.getBatteryInfo(this)
@@ -262,7 +266,11 @@ class LocationTrackingService : Service() {
                 longitude = location.longitude,
                 timestamp = System.currentTimeMillis(),
                 speed = if (location.hasSpeed()) location.speed else null,
-                bearing = if (location.hasBearing()) location.bearing else null
+                bearing = if (location.hasBearing()) location.bearing else null,
+                batteryLevel = batteryLevel, // Add battery level
+                batteryChargingStatus = chargingStatus, // Add battery charging status
+                appStatus = appStatus, // Add app status
+                activeTrackingGroupId = activeTrackingGroupId // NEW: Populate activeTrackingGroupId
             )
             serviceScope.launch {
                 // 1. Save to history

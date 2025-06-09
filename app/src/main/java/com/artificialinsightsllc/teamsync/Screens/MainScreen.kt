@@ -312,6 +312,7 @@ class MainScreen(private val navController: NavHostController) {
         }
 
 
+        // FIX: Initialize currentUserModel with null, it will be loaded in LaunchedEffect
         var currentUserModel by remember { mutableStateOf<UserModel?>(null) }
 
         // State for instructional overlay visibility
@@ -368,8 +369,9 @@ class MainScreen(private val navController: NavHostController) {
                 startAppTrackingService()
             }
 
-            val initialSelectedGroupId = currentUserModel?.selectedActiveGroupId
-            groupMonitorService.startMonitoring(initialSelectedGroupId)
+            // val initialSelectedGroupId = currentUserModel?.selectedActiveGroupId
+            // REMOVED: This line is now redundant and causing the error, as startMonitoring is called in TeamSyncApplication.onCreate()
+            // groupMonitorService.startMonitoring(initialSelectedGroupId)
             groupMonitorService.setUiPermissionsGranted(allPermissionsGranted && hasNotificationPermission)
         }
 
@@ -466,6 +468,11 @@ class MainScreen(private val navController: NavHostController) {
                     ),
                     uiSettings = MapUiSettings(zoomControlsEnabled = false)
                 ) {
+                    // NEW: Calculate stale status for current user
+                    val isCurrentUserLocationStale = userLocation?.let {
+                        System.currentTimeMillis() - it.time >= 300000L // 5 minutes in milliseconds
+                    } ?: false
+
                     userLocation?.let { loc ->
                         val userLatLng = LatLng(loc.latitude, loc.longitude)
                         val markerState = rememberMarkerState()
@@ -478,7 +485,8 @@ class MainScreen(private val navController: NavHostController) {
                         val userMarkerIcon = MarkerIconHelper.rememberUserMarkerIcon(
                             profileImageUrl = userProfilePicUrl,
                             defaultProfileResId = R.drawable.default_profile_pic,
-                            markerPinResId = R.drawable.pin_base_shape
+                            markerPinResId = R.drawable.pin_base_shape,
+                            isLocationStale = isCurrentUserLocationStale // Pass stale status
                         )
 
                         if (userMarkerIcon != null) {
@@ -531,6 +539,9 @@ class MainScreen(private val navController: NavHostController) {
                                     val otherMemberLatLng = LatLng(otherLoc.latitude, otherLoc.longitude)
                                     val otherMarkerState = rememberMarkerState(position = otherMemberLatLng)
 
+                                    // NEW: Calculate stale status for other members
+                                    val isOtherMemberLocationStale = System.currentTimeMillis() - otherLoc.timestamp >= 300000L // 5 minutes in milliseconds
+
                                     LaunchedEffect(otherLoc) {
                                         otherMarkerState.position = otherMemberLatLng
                                     }
@@ -539,7 +550,8 @@ class MainScreen(private val navController: NavHostController) {
                                     val otherMarkerIcon = MarkerIconHelper.rememberUserMarkerIcon(
                                         profileImageUrl = otherProfilePicUrl,
                                         defaultProfileResId = R.drawable.default_profile_pic,
-                                        markerPinResId = R.drawable.pin_base_shape
+                                        markerPinResId = R.drawable.pin_base_shape,
+                                        isLocationStale = isOtherMemberLocationStale // Pass stale status
                                     )
 
                                     if (otherMarkerIcon != null) {

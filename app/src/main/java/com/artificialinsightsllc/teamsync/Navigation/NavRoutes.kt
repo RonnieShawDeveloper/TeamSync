@@ -11,8 +11,7 @@ object NavRoutes {
     const val GROUPS_LIST = "groups_list"
     const val TEAM_LIST = "team_list"
     const val ADD_MAP_MARKER = "add_map_marker"
-    const val TRAVEL_REPORT = "travel_report/{userId}"
+    const val TRAVEL_REPORT = "travel_report/{userId}/{timeRangeMillis}" // UPDATED: Added timeRangeMillis argument
     const val USER_SETTINGS = "user_settings"
-    const val SHUTDOWN = "shutdown" // NEW ROUTE for Shutdown Screen
+    const val SHUTDOWN = "shutdown"
 }
-

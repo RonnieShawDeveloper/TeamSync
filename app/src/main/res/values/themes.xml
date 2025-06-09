@@ -1,5 +1,24 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
-    <style name="Theme.TeamSync" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.TeamSync" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your light theme here. -->
+    </style>
+
+    <!--
+      Alternative UCrop Theme.
+      This inherits from a standard AppCompat theme and sets the UCrop colors manually,
+      which is more robust than inheriting from Theme.UCrop directly.
+    -->
+    <style name="Theme.TeamSync.UCrop" parent="Theme.AppCompat.Light.NoActionBar">
+        <!-- Customize window attributes here -->
+        <item name="android:windowBackground">@android:color/background_dark</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+        <!-- Add space above the uCrop activity -->
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">4dp</item>
+    </style>
+
 </resources>

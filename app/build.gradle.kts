@@ -13,7 +13,7 @@ android {
         minSdk = 29
         targetSdk = 35
         versionCode = 1
-        versionName = "6.2"
+        versionName = "6.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -71,7 +71,8 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation("io.coil-kt:coil:2.6.0")
 
-
+    // Material Components for Android (provides XML themes like Theme.Material3)
+    implementation("com.google.android.material:material:1.12.0")
 
     // UCrop
     implementation("com.github.yalantis:ucrop:2.2.8")

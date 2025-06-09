@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ListAlt // Icon for text-based report
 import androidx.compose.material.icons.filled.Timeline // Icon for map-based history
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -233,12 +233,12 @@ fun MarkerInfoDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                // Row for action buttons (4 buttons)
+                // Row for action buttons
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly, // Evenly spaced for 4 buttons
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val FAB_SIZE = 60.dp // Size of the circular buttons
@@ -257,7 +257,8 @@ fun MarkerInfoDialog(
                             .size(FAB_SIZE)
                             .shadow(4.dp, CircleShape, clip = false),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkBlue)
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkBlue),
+                        contentPadding = PaddingValues(0.dp)
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Chat,
@@ -267,51 +268,7 @@ fun MarkerInfoDialog(
                         )
                     }
 
-                    // 2. Travel Report (Text) Button
-                    Button(
-                        onClick = {
-                            coroutineScope.launch { sheetState.hide() }.invokeOnCompletion {
-                                onDismissRequest() // Dismiss the dialog immediately after hiding
-                                if (personUserId != null) {
-                                    Log.d(
-                                        "MarkerInfoDialog",
-                                        "Navigating to text travel report for userId: $personUserId"
-                                    )
-                                    // Default to 24 hours for the text report
-                                    navController.navigate(
-                                        NavRoutes.TRAVEL_REPORT.replace(
-                                            "{userId}",
-                                            personUserId
-                                        ).replace(
-                                            "{timeRangeMillis}",
-                                            (24 * 60 * 60 * 1000L).toString()
-                                        )
-                                    )
-                                } else {
-                                    Toast.makeText(
-                                        context,
-                                        "Cannot view report: User ID not available.",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                            }
-                        },
-                        enabled = personUserId != null,
-                        modifier = Modifier
-                            .size(FAB_SIZE)
-                            .shadow(4.dp, CircleShape, clip = false),
-                        shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary) // Primary color for distinction
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ListAlt,
-                            contentDescription = "View Report",
-                            tint = Color.White,
-                            modifier = Modifier.size(ICON_SIZE)
-                        )
-                    }
-
-                    // 3. Travel History (Map Plot) Button
+                    // 2. Travel History (Map Plot) Button
                     Button(
                         onClick = {
                             if (personUserId != null) {
@@ -329,7 +286,8 @@ fun MarkerInfoDialog(
                             .size(FAB_SIZE)
                             .shadow(4.dp, CircleShape, clip = false),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary) // Secondary color for distinction
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                        contentPadding = PaddingValues(0.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Timeline, // Timeline icon for history
@@ -339,7 +297,7 @@ fun MarkerInfoDialog(
                         )
                     }
 
-                    // 4. Close Button
+                    // 3. Close Button
                     Button(
                         onClick = {
                             coroutineScope.launch {
@@ -352,7 +310,8 @@ fun MarkerInfoDialog(
                             .size(FAB_SIZE)
                             .shadow(4.dp, CircleShape, clip = false),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000)) // Maroon color for close
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000)),
+                        contentPadding = PaddingValues(0.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Close,

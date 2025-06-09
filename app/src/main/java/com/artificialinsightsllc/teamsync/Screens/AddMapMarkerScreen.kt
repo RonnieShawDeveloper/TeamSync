@@ -227,24 +227,34 @@ class AddMapMarkerScreen(private val navController: NavHostController) {
                 // UCrop destination file (also in cacheDir for exact replication)
                 val destinationUri = Uri.fromFile(File(context.cacheDir, "cropped_image.jpg"))
                 val options = UCrop.Options().apply {
-                    setCircleDimmedLayer(false) // Changed from true, as map markers are not typically circular
-                    setShowCropFrame(true) // Show crop frame for better UX
-                    setShowCropGrid(true) // Show crop grid
-                    setToolbarTitle("Crop Photo Marker")
-                    setToolbarColor(Color(0xFF0D47A1).toArgb())
-                    setStatusBarColor(Color(0xFF0D47A1).toArgb())
-                    setToolbarWidgetColor(Color.White.toArgb())
+                    // Set the colors directly since the resources are not defined.
+                    // This forces UCrop to add the necessary padding to avoid drawing content behind the system UI.
+                    setStatusBarColor(Color.Black.hashCode())
+
+                    // Set a toolbar color that fits the app's theme.
+                    setToolbarColor(Color(0xFF0D47A1).hashCode()) // Using your DarkBlue color
+
+                    // Set the color of the active widget controls (e.g., the selected aspect ratio).
+                    // Note the corrected method name: setActiveControlsWidgetColor
+                    setActiveControlsWidgetColor(Color(0xFF0D47A1).hashCode()) // Using your DarkBlue color
+
+                    // Set the color of the toolbar's title text and icons (e.g., the checkmark).
+                    setToolbarWidgetColor(Color.White.hashCode())
+
+                    // Set the title of the cropping screen.
+                    setToolbarTitle("Crop Photo")
                 }
+
 
                 // Ensure the parent directory for the cropped image exists
                 destinationUri.path?.let { path -> File(path).parentFile?.mkdirs() }
 
-                // Launch UCrop with the URI supplied to the camera (capturedImageUriState.value)
                 val intent = UCrop.of(capturedImageUriState.value!!, destinationUri)
                     .withAspectRatio(1f, 1f)
-                    .withMaxResultSize(512, 512)
+                    .withMaxResultSize(1024, 1024)
                     .withOptions(options)
                     .getIntent(context)
+
                 cropResultLauncher.launch(intent)
 
             } else {

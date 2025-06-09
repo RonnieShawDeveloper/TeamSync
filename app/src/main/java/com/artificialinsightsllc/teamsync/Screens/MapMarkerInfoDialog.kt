@@ -7,36 +7,14 @@ import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat // Corrected to AutoMirrored
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,33 +29,77 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.artificialinsightsllc.teamsync.Helpers.TimeFormatter
-import com.artificialinsightsllc.teamsync.Helpers.UnitConverter
+import com.artificialinsightsllc.teamsync.Models.GroupMembers
 import com.artificialinsightsllc.teamsync.Models.MapMarker
-import com.artificialinsightsllc.teamsync.Models.MapMarkerType
-import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
-import com.artificialinsightsllc.teamsync.ui.theme.LightCream
+import com.artificialinsightsllc.teamsync.Models.UserModel
 import com.artificialinsightsllc.teamsync.R
+import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.IOException
-import java.util.Locale
+import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MapMarkerInfoDialog(
-    mapMarker: MapMarker, // Now accepts a MapMarker object
+    mapMarker: MapMarker,
     onDismissRequest: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val coroutineScope = rememberCoroutineScope()
     var timeAgoString by remember { mutableStateOf("") }
     var currentAddress by remember { mutableStateOf<String?>(null) }
-    val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    val DarkBlue = Color(0xFF0D47A1)
+    var creatorName by remember { mutableStateOf("Loading...") }
+    var canDelete by remember { mutableStateOf(false) }
+    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
 
-    // LaunchedEffect to update the timeAgoString and perform geocoding
+    LaunchedEffect(mapMarker.userId, currentUserId) {
+        if (currentUserId == null) return@LaunchedEffect
+
+        val db = FirebaseFirestore.getInstance()
+        // Check if the current user is the creator
+        if (mapMarker.userId == currentUserId) {
+            canDelete = true
+        } else {
+            // Check if the current user is an ADMIN or OWNER of the group
+            try {
+                val memberDoc = db.collection("groups").document(mapMarker.groupId)
+                    .collection("members").document(currentUserId).get().await()
+
+                if (memberDoc.exists()) {
+                    val member = memberDoc.toObject(GroupMembers::class.java)
+                    if (member?.memberRole.toString() == "ADMIN" || member?.memberRole.toString() == "OWNER") {
+                        canDelete = true
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MapMarkerInfo", "Error checking delete permission: ${e.message}")
+            }
+        }
+    }
+
+    LaunchedEffect(mapMarker.userId) {
+        val db = FirebaseFirestore.getInstance()
+        try {
+            val userDoc = db.collection("users").document(mapMarker.userId).get().await()
+            creatorName = if (userDoc.exists()) {
+                userDoc.toObject(UserModel::class.java)?.displayName ?: "Unknown Member"
+            } else {
+                "Unknown User"
+            }
+        } catch (e: Exception) {
+            Log.e("MapMarkerInfo", "Error fetching creator name: ${e.message}")
+            creatorName = "Unknown Member"
+        }
+    }
+
     LaunchedEffect(mapMarker.timestamp, mapMarker.latitude, mapMarker.longitude) {
         launch {
             while (true) {
@@ -85,7 +107,6 @@ fun MapMarkerInfoDialog(
                 delay(1000)
             }
         }
-
         currentAddress = geocodeLocation(context, mapMarker.latitude, mapMarker.longitude)
     }
 
@@ -94,9 +115,7 @@ fun MapMarkerInfoDialog(
     }
 
     ModalBottomSheet(
-        onDismissRequest = {
-            onDismissRequest()
-        },
+        onDismissRequest = onDismissRequest,
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
         containerColor = Color.Transparent,
@@ -126,121 +145,101 @@ fun MapMarkerInfoDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Display content based on marker type
-                when (mapMarker.markerType) {
-                    MapMarkerType.PHOTO -> {
-                        mapMarker.photoUrl?.let { url ->
-                            Image(
-                                painter = rememberAsyncImagePainter(
-                                    model = url,
-                                    error = painterResource(id = R.drawable.no_image) // Fallback
-                                ),
-                                contentDescription = "Photo Marker",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(200.dp) // Larger size for photo
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .shadow(8.dp, RoundedCornerShape(8.dp), clip = false)
-                                    .background(Color.LightGray)
-                            )
-                        } ?: Image(
-                            painter = painterResource(id = R.drawable.no_image),
-                            contentDescription = "No Image Available",
-                            modifier = Modifier.size(120.dp)
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = mapMarker.message,
-                            fontSize = 16.sp,
-                            color = DarkBlue.copy(alpha = 0.9f),
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    MapMarkerType.CHAT -> {
-                        // Chat icon or just message, depending on preference
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Chat,
-                            contentDescription = "Chat Marker",
-                            tint = DarkBlue,
-                            modifier = Modifier.size(60.dp)
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = mapMarker.message,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = DarkBlue,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                if (!mapMarker.photoUrl.isNullOrEmpty()) {
+                    Image(
+                        painter = rememberAsyncImagePainter(model = mapMarker.photoUrl),
+                        contentDescription = "Marker Image",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(300.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                    )
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = mapMarker.message,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = DarkBlue,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(4.dp))
 
-                // Common info for all marker types
                 currentAddress?.let {
                     Text(
                         text = it,
-                        fontSize = 14.sp,
+                        fontSize = 16.sp,
                         color = DarkBlue.copy(alpha = 0.8f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
+                        textAlign = TextAlign.Center
                     )
                 } ?: Text(
                     text = "Address: Looking up...",
-                    fontSize = 12.sp,
+                    fontSize = 14.sp,
                     color = DarkBlue.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
+                    textAlign = TextAlign.Center
                 )
 
                 Text(
-                    text = "Posted $timeAgoString",
-                    fontSize = 12.sp,
+                    text = "Created by: $creatorName",
+                    fontSize = 14.sp,
                     color = DarkBlue.copy(alpha = 0.8f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
+                    textAlign = TextAlign.Center
                 )
 
-                mapMarker.cameraBearing?.let {
-                    Text(
-                        text = "Camera Dir: ${UnitConverter.getCardinalDirection(it)}",
-                        fontSize = 12.sp,
-                        color = DarkBlue.copy(alpha = 0.8f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                Text(
+                    text = "Created $timeAgoString",
+                    fontSize = 14.sp,
+                    color = DarkBlue.copy(alpha = 0.8f),
+                    textAlign = TextAlign.Center
+                )
 
                 Spacer(Modifier.height(16.dp))
 
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
-                        onClick = {
-                            Toast.makeText(context, "Private Chat functionality coming soon!", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier
-                            .size(80.dp)
-                            .shadow(8.dp, CircleShape, clip = false),
-                        shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkBlue)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Chat,
-                            contentDescription = "Private Chat",
-                            tint = Color.White,
-                            modifier = Modifier.size(40.dp)
-                        )
+                    val FAB_SIZE = 60.dp
+                    val ICON_SIZE = 40.dp
+
+                    // Delete Button (conditionally displayed)
+                    if (canDelete) {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    try {
+                                        Log.d("MapMarkerInfo", "Deleting marker: ${mapMarker.id}")
+                                        FirebaseFirestore.getInstance()
+                                            .collection("mapMarkers").document(mapMarker.id)
+                                            .delete().await()
+                                        Toast.makeText(context, "Marker deleted", Toast.LENGTH_SHORT).show()
+                                        sheetState.hide()
+                                        onDismissRequest()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Failed to delete marker", Toast.LENGTH_SHORT).show()
+                                        Log.e("MapMarkerInfo", "Error deleting marker: ${e.message}")
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .size(FAB_SIZE)
+                                .shadow(4.dp, CircleShape, clip = false),
+                            shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = "Delete Marker",
+                                tint = Color.White,
+                                modifier = Modifier.size(ICON_SIZE)
+                            )
+                        }
                     }
 
+                    // Close Button
                     Button(
                         onClick = {
                             coroutineScope.launch {
@@ -250,16 +249,17 @@ fun MapMarkerInfoDialog(
                             }
                         },
                         modifier = Modifier
-                            .size(80.dp)
-                            .shadow(8.dp, CircleShape, clip = false),
+                            .size(FAB_SIZE)
+                            .shadow(4.dp, CircleShape, clip = false),
                         shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF800000)),
+                        contentPadding = PaddingValues(0.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Close",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(ICON_SIZE)
                         )
                     }
                 }
@@ -268,19 +268,22 @@ fun MapMarkerInfoDialog(
     }
 }
 
-// Helper function for geocoding a location to an address string (copied from MarkerInfoDialog)
-internal suspend fun geocodeLocation(context: Context, latitude: Double, longitude: Double): String {
+private suspend fun geocodeLocation(context: Context, latitude: Double, longitude: Double): String {
     return withContext(Dispatchers.IO) {
         val geocoder = Geocoder(context, Locale.getDefault())
         try {
+            if (!Geocoder.isPresent()) {
+                Log.e("Geocoding", "Geocoder is not present.")
+                return@withContext "Address lookup failed"
+            }
             val addresses = geocoder.getFromLocation(latitude, longitude, 1)
             addresses?.firstOrNull()?.getAddressLine(0) ?: "Address not found"
         } catch (e: IOException) {
-            Log.e("MapMarkerInfoDialog", "Geocoding failed for $latitude, $longitude: ${e.message}")
+            Log.e("Geocoding", "Geocoding failed: ${e.message}")
             "Address lookup failed"
-        } catch (e: IllegalArgumentException) {
-            Log.e("MapMarkerInfoDialog", "Invalid LatLng for geocoding: $latitude, $longitude: ${e.message}")
-            "Invalid location"
+        } catch (e: Exception) {
+            Log.e("Geocoding", "Unexpected geocoding error: ${e.message}")
+            "Address lookup failed"
         }
     }
 }

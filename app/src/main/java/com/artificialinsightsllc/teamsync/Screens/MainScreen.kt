@@ -119,10 +119,12 @@ import com.artificialinsightsllc.teamsync.TeamSyncApplication
 import com.artificialinsightsllc.teamsync.Services.LocationTrackingService
 import java.io.IOException
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 // NEW: Add BorderStroke import for the close button
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape // Import CircleShape
 
 // NEW: Import DarkBlue and LightCream from your theme colors
@@ -134,6 +136,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.ui.draw.shadow
+
 
 class MainScreen(private val navController: NavHostController) {
 
@@ -180,22 +183,21 @@ class MainScreen(private val navController: NavHostController) {
         var showCustomMarkerInfoDialog by remember { mutableStateOf(false) }
         var currentMarkerInfo by remember { mutableStateOf<MarkerDisplayInfo?>(null) }
 
-        // NEW: State for the map loading dialog
-        var showMapLoadingDialog by remember { mutableStateOf(true) } // Initially true
+        var showMapLoadingDialog by remember { mutableStateOf(true) }
+
+        // State for the countdown timer
+        var countdownString by remember { mutableStateOf("") }
 
 
         val cameraPositionState = rememberCameraPositionState {
-            // Initial camera position changed to approximate center of contiguous US, zoomed out to show the whole country.
             position = LatLng(39.8283, -98.5795).let { CameraPosition.fromLatLngZoom(it, 3f) }
         }
         val fusedLocationClient: FusedLocationProviderClient = remember {
             getFusedLocationProviderClient(context)
         }
 
-        // Live data from GroupMonitorService
         val isInGroup by groupMonitorService.isInActiveGroup.collectAsStateWithLifecycle()
         val activeGroup by groupMonitorService.activeGroup.collectAsStateWithLifecycle()
-        val activeGroupMember by groupMonitorService.activeGroupMember.collectAsStateWithLifecycle()
         val userMessage by groupMonitorService.userMessage.collectAsStateWithLifecycle()
         val effectiveLocationUpdateInterval by groupMonitorService.effectiveLocationUpdateInterval.collectAsStateWithLifecycle()
 
@@ -205,7 +207,6 @@ class MainScreen(private val navController: NavHostController) {
         Log.d("MainScreen", "Collected ${mapMarkers.size} map markers.")
 
 
-        // Permissions needed by the app
         val allPermissionsNeeded = remember {
             mutableListOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -249,36 +250,6 @@ class MainScreen(private val navController: NavHostController) {
             Log.d("MainScreen", "Requested stop of LocationTrackingService.")
         }
 
-        @SuppressLint("MissingPermission")
-        fun startLocationUpdates(
-            fusedLocationClient: FusedLocationProviderClient,
-            locationCallback: LocationCallback,
-            interval: Long
-        ) {
-            val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
-                .setMinUpdateIntervalMillis(interval / 2)
-                .build()
-
-            try {
-                fusedLocationClient.requestLocationUpdates(
-                    locationRequest,
-                    locationCallback,
-                    Looper.getMainLooper()
-                )
-                Log.d("MainScreen", "Started local GPS location updates with interval: $interval ms")
-            } catch (e: SecurityException) {
-                Log.e("MainScreen", "Local GPS location permission denied: ${e.message}")
-            }
-        }
-
-        fun stopLocationUpdates(
-            fusedLocationClient: FusedLocationProviderClient,
-            locationCallback: LocationCallback
-        ) {
-            fusedLocationClient.removeLocationUpdates(locationCallback)
-            Log.d("MainScreen", "Stopped local GPS location updates.")
-        }
-
         val locationCallback = remember {
             object : LocationCallback() {
                 override fun onLocationResult(locationResult: LocationResult) {
@@ -312,13 +283,9 @@ class MainScreen(private val navController: NavHostController) {
         }
 
 
-        // FIX: Initialize currentUserModel with null, it will be loaded in LaunchedEffect
         var currentUserModel by remember { mutableStateOf<UserModel?>(null) }
 
-        // State for instructional overlay visibility
         var showInstructionsOverlay by remember { mutableStateOf(false) }
-
-        // --- LaunchedEffects for initial setup and state observation ---
 
         LaunchedEffect(Unit) {
             val auth = FirebaseAuth.getInstance()
@@ -334,10 +301,8 @@ class MainScreen(private val navController: NavHostController) {
                         currentUserModel = userSnapshot.toObject(UserModel::class.java)
                         Log.d("MainScreen", "User profile loaded: ${currentUserModel?.displayName}")
 
-                        // Check mainInstructionsSeen flag here
                         if (currentUserModel?.mainInstructionsSeen != true) {
                             showInstructionsOverlay = true
-                            // Don't save immediately, wait for user to close it.
                         }
 
                     } else {
@@ -368,12 +333,32 @@ class MainScreen(private val navController: NavHostController) {
                 Log.d("MainScreen", "All permissions initially granted on app launch. Attempting to start Foreground Service immediately.")
                 startAppTrackingService()
             }
-
-            // val initialSelectedGroupId = currentUserModel?.selectedActiveGroupId
-            // REMOVED: This line is now redundant and causing the error, as startMonitoring is called in TeamSyncApplication.onCreate()
-            // groupMonitorService.startMonitoring(initialSelectedGroupId)
             groupMonitorService.setUiPermissionsGranted(allPermissionsGranted && hasNotificationPermission)
         }
+
+        // Countdown Timer Logic
+        LaunchedEffect(activeGroup) {
+            val endTime = activeGroup?.groupEndTimestamp
+            if (endTime != null) {
+                while (true) {
+                    val remaining = endTime - System.currentTimeMillis()
+                    if (remaining > 0) {
+                        val days = TimeUnit.MILLISECONDS.toDays(remaining)
+                        val hours = TimeUnit.MILLISECONDS.toHours(remaining) % 24
+                        val minutes = TimeUnit.MILLISECONDS.toMinutes(remaining) % 60
+                        val seconds = TimeUnit.MILLISECONDS.toSeconds(remaining) % 60
+                        countdownString = String.format("%02d:%02d:%02d:%02d", days, hours, minutes, seconds)
+                    } else {
+                        countdownString = "00:00:00:00"
+                        break
+                    }
+                    delay(1000L)
+                }
+            } else {
+                countdownString = ""
+            }
+        }
+
 
         DisposableEffect(lifecycleOwner, fusedLocationClient, allPermissionsGranted, effectiveLocationUpdateInterval) {
             val observer = LifecycleEventObserver { _, event ->
@@ -400,7 +385,6 @@ class MainScreen(private val navController: NavHostController) {
             }
         }
 
-        // NEW: Dismiss map loading dialog when initial center is performed
         LaunchedEffect(hasPerformedInitialCenter) {
             if (hasPerformedInitialCenter) {
                 showMapLoadingDialog = false
@@ -468,9 +452,8 @@ class MainScreen(private val navController: NavHostController) {
                     ),
                     uiSettings = MapUiSettings(zoomControlsEnabled = false)
                 ) {
-                    // NEW: Calculate stale status for current user
                     val isCurrentUserLocationStale = userLocation?.let {
-                        System.currentTimeMillis() - it.time >= 300000L // 5 minutes in milliseconds
+                        System.currentTimeMillis() - it.time >= 300000L
                     } ?: false
 
                     userLocation?.let { loc ->
@@ -486,7 +469,7 @@ class MainScreen(private val navController: NavHostController) {
                             profileImageUrl = userProfilePicUrl,
                             defaultProfileResId = R.drawable.default_profile_pic,
                             markerPinResId = R.drawable.pin_base_shape,
-                            isLocationStale = isCurrentUserLocationStale // Pass stale status
+                            isLocationStale = isCurrentUserLocationStale
                         )
 
                         if (userMarkerIcon != null) {
@@ -503,7 +486,7 @@ class MainScreen(private val navController: NavHostController) {
                                         bearing = if (loc.hasBearing()) loc.bearing else null,
                                         profilePhotoUrl = userProfilePicUrl,
                                         latLng = userLatLng,
-                                        userId = FirebaseAuth.getInstance().currentUser?.uid // Pass current user's ID
+                                        userId = FirebaseAuth.getInstance().currentUser?.uid
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -521,7 +504,7 @@ class MainScreen(private val navController: NavHostController) {
                                         bearing = if (loc.hasBearing()) loc.bearing else null,
                                         profilePhotoUrl = userProfilePicUrl,
                                         latLng = userLatLng,
-                                        userId = FirebaseAuth.getInstance().currentUser?.uid // Pass current user's ID
+                                        userId = FirebaseAuth.getInstance().currentUser?.uid
                                     )
                                     showCustomMarkerInfoDialog = true
                                     true
@@ -539,8 +522,7 @@ class MainScreen(private val navController: NavHostController) {
                                     val otherMemberLatLng = LatLng(otherLoc.latitude, otherLoc.longitude)
                                     val otherMarkerState = rememberMarkerState(position = otherMemberLatLng)
 
-                                    // NEW: Calculate stale status for other members
-                                    val isOtherMemberLocationStale = System.currentTimeMillis() - otherLoc.timestamp >= 300000L // 5 minutes in milliseconds
+                                    val isOtherMemberLocationStale = System.currentTimeMillis() - otherLoc.timestamp >= 300000L
 
                                     LaunchedEffect(otherLoc) {
                                         otherMarkerState.position = otherMemberLatLng
@@ -551,7 +533,7 @@ class MainScreen(private val navController: NavHostController) {
                                         profileImageUrl = otherProfilePicUrl,
                                         defaultProfileResId = R.drawable.default_profile_pic,
                                         markerPinResId = R.drawable.pin_base_shape,
-                                        isLocationStale = isOtherMemberLocationStale // Pass stale status
+                                        isLocationStale = isOtherMemberLocationStale
                                     )
 
                                     if (otherMarkerIcon != null) {
@@ -568,7 +550,7 @@ class MainScreen(private val navController: NavHostController) {
                                                     bearing = otherLoc.bearing,
                                                     profilePhotoUrl = otherProfilePicUrl,
                                                     latLng = otherMemberLatLng,
-                                                    userId = otherLoc.userId // Pass the other member's userId
+                                                    userId = otherLoc.userId
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -586,7 +568,7 @@ class MainScreen(private val navController: NavHostController) {
                                                     bearing = otherLoc.bearing,
                                                     profilePhotoUrl = otherProfilePicUrl,
                                                     latLng = otherMemberLatLng,
-                                                    userId = otherLoc.userId // Pass the other member's userId
+                                                    userId = otherLoc.userId
                                                 )
                                                 showCustomMarkerInfoDialog = true
                                                 true
@@ -625,7 +607,7 @@ class MainScreen(private val navController: NavHostController) {
                                             profilePhotoUrl = mapMarker.photoUrl,
                                             latLng = markerLatLng,
                                             mapMarker = mapMarker,
-                                            userId = null // Map markers don't have a direct userId for the report
+                                            userId = null
                                         )
                                         showCustomMarkerInfoDialog = true
                                         true
@@ -636,7 +618,6 @@ class MainScreen(private val navController: NavHostController) {
                     }
                 }
 
-                // --- Logo Overlay with Group Name ---
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -670,7 +651,30 @@ class MainScreen(private val navController: NavHostController) {
                     }
                 }
 
-                // --- Floating Buttons on the Right Side ---
+                // Countdown Timer Badge
+                AnimatedVisibility(
+                    visible = activeGroup?.groupEndTimestamp != null,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = innerPadding.calculateBottomPadding() + 8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .shadow(4.dp, RoundedCornerShape(12.dp))
+                            .background(DarkBlue, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "GROUP EXPIRES IN\n$countdownString",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            fontSize = 14.sp,
+                            lineHeight = 12.sp
+                        )
+                    }
+                }
+
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -678,31 +682,27 @@ class MainScreen(private val navController: NavHostController) {
                             end = 16.dp,
                             bottom = 16.dp + innerPadding.calculateBottomPadding()
                         ),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // NEW FAB for ShutdownScreen
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = { navController.navigate(NavRoutes.SHUTDOWN) },
-                        containerColor = MaterialTheme.colorScheme.error, // A distinct color for shutdown
-                        contentColor = MaterialTheme.colorScheme.onError
-                    ) {
-                        Icon(Icons.Filled.ExitToApp, "Logout/Shutdown")
-                    }
+                        label = "SHUTDOWN",
+                        icon = { Icon(Icons.Filled.ExitToApp, "Logout/Shutdown") },
+                        enabled = true,
+                        fabEnabledColor = MaterialTheme.colorScheme.error,
+                        fabDisabledColor = MaterialTheme.colorScheme.error,
+                        fabEnabledContentColor = MaterialTheme.colorScheme.onError,
+                        fabDisabledContentColor = MaterialTheme.colorScheme.onError
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = {
                             mapLockedToUserLocation = !mapLockedToUserLocation
                             if (mapLockedToUserLocation) {
                                 userLocation?.let { loc ->
                                     val newLatLng = LatLng(loc.latitude, loc.longitude)
-                                    val currentZoom = cameraPositionState.position.zoom
                                     coroutineScope.launch {
-                                        val newCameraPosition = CameraPosition.Builder()
-                                            .target(newLatLng)
-                                            .zoom(currentZoom)
-                                            .tilt(0f)
-                                            .bearing(0f)
-                                            .build()
                                         cameraPositionState.animate(
                                             CameraUpdateFactory.newLatLngZoom(newLatLng, 15f)
                                         )
@@ -713,44 +713,66 @@ class MainScreen(private val navController: NavHostController) {
                                 toastMessage("Map Unlocked (can roam)")
                             }
                         },
-                        containerColor = if (mapLockedToUserLocation) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = if (mapLockedToUserLocation) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Lock,
-                            contentDescription = if (mapLockedToUserLocation) "Lock Map" else "Unlock Map"
-                        )
-                    }
-                    FloatingActionButton(
-                        onClick = { navController.navigate(NavRoutes.USER_SETTINGS) }, // Navigate to UserSettingsScreen
-                        containerColor = fabEnabledColor, contentColor = fabEnabledContentColor
-                    ) { Icon(Icons.Filled.Settings, "Member Settings") }
+                        label = if (mapLockedToUserLocation) "UNLOCK MAP" else "LOCK MAP",
+                        icon = { Icon(imageVector = if (mapLockedToUserLocation) Icons.Filled.LockOpen else Icons.Filled.Lock, contentDescription = "Toggle Map Lock") },
+                        enabled = true,
+                        fabEnabledColor = if (mapLockedToUserLocation) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primary,
+                        fabDisabledColor = Color.Transparent,
+                        fabEnabledContentColor = if (mapLockedToUserLocation) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onPrimary,
+                        fabDisabledContentColor = Color.Transparent
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
+                        onClick = { navController.navigate(NavRoutes.USER_SETTINGS) },
+                        label = "USER SETTINGS",
+                        icon = { Icon(Icons.Filled.Settings, "Member Settings") },
+                        enabled = true,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
+
+                    LabeledFab(
                         onClick = { if (isInGroup) { toastMessage("Chat Window clicked!") } },
-                        containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
-                        contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
-                    ) { Icon(Icons.Filled.Chat, "Chat Window") }
+                        label = "GROUP CHAT",
+                        icon = { Icon(Icons.Filled.Chat, "Chat Window") },
+                        enabled = isInGroup,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = {
                             if (isInGroup) {
                                 navController.navigate(NavRoutes.ADD_MAP_MARKER)
                             } else {
-                                toastMessage("Add Marker - Must be in a Group to add markers!")
+                                toastMessage("Must be in a Group to add markers!")
                             }
                         },
-                        containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
-                        contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
-                    ) { Icon(Icons.Filled.LocationOn, "Add Marker") }
+                        label = "ADD MARKER",
+                        icon = { Icon(Icons.Filled.LocationOn, "Add Marker") },
+                        enabled = isInGroup,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = { navController.navigate(NavRoutes.CREATE_GROUP) },
-                        containerColor = fabEnabledColor, contentColor = fabEnabledContentColor
-                    ) { Icon(Icons.Filled.Add, "Create Group") }
+                        label = "CREATE GROUP",
+                        icon = { Icon(Icons.Filled.Add, "Create Group") },
+                        enabled = true,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
                 }
 
-                // --- Floating Buttons on the Left Side ---
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -758,55 +780,88 @@ class MainScreen(private val navController: NavHostController) {
                             start = 16.dp,
                             bottom = 16.dp + innerPadding.calculateBottomPadding()
                         ),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = { if (isInGroup) { toastMessage("Group Settings clicked!") } },
-                        containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
-                        contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
-                    ) { Icon(Icons.Filled.Tune, "Group Settings") }
+                        label = "GROUP SETTINGS",
+                        icon = { Icon(Icons.Filled.Tune, "Group Settings") },
+                        enabled = isInGroup,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = { if (isInGroup) { toastMessage("Group Status clicked!") } },
-                        containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
-                        contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
-                    ) { Icon(Icons.Filled.Info, "Group Status") }
+                        label = "GROUP STATUS",
+                        icon = { Icon(Icons.Filled.Info, "Group Status") },
+                        enabled = isInGroup,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = { if (isInGroup) { toastMessage("Send FCM Notification clicked!") } },
-                        containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
-                        contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
-                    ) { Icon(Icons.Filled.Notifications, "Send FCM Notification") }
+                        label = "SEND ALERTS",
+                        icon = { Icon(Icons.Filled.Notifications, "Send FCM Notification") },
+                        enabled = isInGroup,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = { if (isInGroup) { toastMessage("Add GeoFence clicked!") } },
-                        containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
-                        contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
-                    ) { Icon(Icons.Filled.Polyline, "Add GeoFence") }
+                        label = "GEOFENCING",
+                        icon = { Icon(Icons.Filled.Polyline, "Add GeoFence") },
+                        enabled = isInGroup,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = {
                             if (isInGroup) {
                                 navController.navigate(NavRoutes.TEAM_LIST)
                             } else {
-                                toastMessage("Team List - Must be in a Group to view!")
+                                toastMessage("Must be in a Group to view Team List!")
                             }
                         },
-                        containerColor = if (isInGroup) fabEnabledColor else fabDisabledColor,
-                        contentColor = if (isInGroup) fabEnabledContentColor else fabDisabledContentColor
-                    ) { Icon(Icons.Filled.People, "Team List") }
+                        label = "GROUP MEMBERS",
+                        icon = { Icon(Icons.Filled.People, "Team List") },
+                        enabled = isInGroup,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
 
-                    FloatingActionButton(
+                    LabeledFab(
                         onClick = { navController.navigate(NavRoutes.GROUPS_LIST) },
-                        containerColor = fabEnabledColor, contentColor = fabEnabledContentColor
-                    ) { Icon(Icons.Filled.Groups, "Groups List") }
+                        label = "JOIN GROUPS",
+                        icon = { Icon(Icons.Filled.Groups, "Groups List") },
+                        enabled = true,
+                        fabEnabledColor = fabEnabledColor,
+                        fabDisabledColor = fabDisabledColor,
+                        fabEnabledContentColor = fabEnabledContentColor,
+                        fabDisabledContentColor = fabDisabledContentColor
+                    )
                 }
+
 
 
                 if (showCustomMarkerInfoDialog && currentMarkerInfo != null) {
                     if (currentMarkerInfo!!.mapMarker == null) {
                         MarkerInfoDialog(
-                            navController = navController, // NEW: Pass navController here
+                            navController = navController,
                             profilePhotoUrl = currentMarkerInfo!!.profilePhotoUrl,
                             title = currentMarkerInfo!!.title,
                             latLng = currentMarkerInfo!!.latLng,
@@ -814,10 +869,9 @@ class MainScreen(private val navController: NavHostController) {
                             speed = currentMarkerInfo!!.speed,
                             bearing = currentMarkerInfo!!.bearing,
                             onDismissRequest = { showCustomMarkerInfoDialog = false },
-                            personUserId = currentMarkerInfo!!.userId // Pass userId here
+                            personUserId = currentMarkerInfo!!.userId
                         )
                     } else {
-                        // MapMarkerInfoDialog does not need navController or userId currently
                         MapMarkerInfoDialog(
                             mapMarker = currentMarkerInfo!!.mapMarker!!,
                             onDismissRequest = { showCustomMarkerInfoDialog = false }
@@ -825,7 +879,6 @@ class MainScreen(private val navController: NavHostController) {
                     }
                 }
 
-                // Expired Group Dialog
                 if (showExpiredGroupDialog && expiredGroupDialogMessage != null) {
                     AlertDialog(
                         onDismissRequest = {
@@ -846,7 +899,6 @@ class MainScreen(private val navController: NavHostController) {
                 }
             }
 
-            // Instructional Overlay
             AnimatedVisibility(
                 visible = showInstructionsOverlay,
                 enter = fadeIn(),
@@ -856,19 +908,17 @@ class MainScreen(private val navController: NavHostController) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.5f)) // Semi-transparent black background
+                        .background(Color.Black.copy(alpha = 0.5f))
                 ) {
-                    // Instructional Graphic
                     Image(
-                        painter = painterResource(id = R.drawable.instructions), // Your drawable
+                        painter = painterResource(id = R.drawable.instructions),
                         contentDescription = "Instructions",
                         modifier = Modifier
-                            .align(Alignment.Center) // Center the image
+                            .align(Alignment.Center)
                             .fillMaxWidth(),
-                        contentScale = ContentScale.Fit // IMPORTANT: Fit to prevent stretching
+                        contentScale = ContentScale.Fit
                     )
 
-                    // Close Button (top right)
                     FloatingActionButton(
                         onClick = {
                             coroutineScope.launch {
@@ -877,7 +927,7 @@ class MainScreen(private val navController: NavHostController) {
                                     val updatedUser = user.copy(mainInstructionsSeen = true)
                                     firestoreService.saveUserProfile(updatedUser).onSuccess {
                                         Log.d("MainScreen", "mainInstructionsSeen updated to true in Firestore.")
-                                        currentUserModel = updatedUser // Update local state immediately
+                                        currentUserModel = updatedUser
                                     }.onFailure { e ->
                                         Log.e("MainScreen", "Failed to update mainInstructionsSeen: ${e.message}")
                                     }
@@ -886,46 +936,45 @@ class MainScreen(private val navController: NavHostController) {
                         },
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(top = 30.dp, end = 16.dp) // Maintain padding
-                            .border(2.dp, Color.Black, CircleShape), // Correct way to add border
-                        containerColor = Color(0xFFFF0000), // Bright red
-                        contentColor = Color.White, // White 'X'
-                        shape = CircleShape // Use CircleShape directly from material3
+                            .padding(top = 30.dp, end = 16.dp)
+                            .border(2.dp, Color.Black, CircleShape),
+                        containerColor = Color(0xFFFF0000),
+                        contentColor = Color.White,
+                        shape = CircleShape
                     ) {
                         Icon(Icons.Filled.Close, "Close Instructions")
                     }
                 }
             }
 
-            // NEW: Map Loading Dialog
             if (showMapLoadingDialog) {
                 AlertDialog(
-                    onDismissRequest = { /* This dialog is not dismissible by user interaction */ },
+                    onDismissRequest = { },
                     properties = androidx.compose.ui.window.DialogProperties(
                         dismissOnBackPress = false,
                         dismissOnClickOutside = false
                     ),
                     modifier = Modifier
-                        .fillMaxWidth(0.8f) // Take 80% of width
+                        .fillMaxWidth(0.8f)
                         .wrapContentHeight()
-                        .shadow(8.dp, RoundedCornerShape(16.dp), clip = false) // Add shadow
+                        .shadow(8.dp, RoundedCornerShape(16.dp), clip = false)
                 ) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp), // Rounded corners
-                        colors = CardDefaults.cardColors(containerColor = LightCream) // LightCream background
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = LightCream)
                     ) {
                         Column(
                             modifier = Modifier.padding(24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            CircularProgressIndicator(color = DarkBlue) // DarkBlue spinner
+                            CircularProgressIndicator(color = DarkBlue)
                             Text(
                                 text = "Setting up the map... one moment",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = DarkBlue, // DarkBlue text
+                                color = DarkBlue,
                                 textAlign = TextAlign.Center
                             )
                         }
@@ -956,6 +1005,51 @@ class MainScreen(private val navController: NavHostController) {
             Log.e("MainScreen", "Local GPS location permission denied: ${e.message}")
         }
     }
+
+    @Composable
+    fun LabeledFab(
+        onClick: () -> Unit,
+        label: String,
+        icon: @Composable () -> Unit,
+        enabled: Boolean,
+        fabEnabledColor: Color,
+        fabDisabledColor: Color,
+        fabEnabledContentColor: Color,
+        fabDisabledContentColor: Color
+    ) {
+        Box(
+            contentAlignment = Alignment.Center
+        ) {
+            FloatingActionButton(
+                onClick = { if(enabled) onClick() },
+                containerColor = if (enabled) fabEnabledColor else fabDisabledColor,
+                contentColor = if (enabled) fabEnabledContentColor else fabDisabledContentColor,
+                shape = CircleShape
+            ) {
+                icon()
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 4.dp)
+                    .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+                    .background(if (enabled) fabEnabledColor else fabDisabledColor, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 0.dp, vertical = 0.dp)
+            ) {
+                Text(
+                    text = label,
+                    color = if (enabled) fabEnabledContentColor else fabDisabledContentColor,
+                    fontSize = 8.sp,
+                    lineHeight = 4.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 1.dp, vertical = 1.dp)
+                )
+            }
+        }
+    }
+
+
 
     fun stopLocationUpdates(
         fusedLocationClient: FusedLocationProviderClient,

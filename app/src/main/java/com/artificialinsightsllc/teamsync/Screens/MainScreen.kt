@@ -122,13 +122,16 @@ class MainScreen(private val navController: NavHostController) {
         val currentMarkerInfo by viewModel.currentMarkerInfo.collectAsStateWithLifecycle()
 
         val showMapLoadingDialog by viewModel.showMapLoadingDialog.collectAsStateWithLifecycle()
+        val lastKnownCameraPosition by viewModel.lastKnownCameraPosition.collectAsStateWithLifecycle() // NEW: Collect last known camera position
+
 
         // Local UI state (not persistent across recompositions/navigation, purely visual)
         val snackbarHostState = remember { SnackbarHostState() }
 
 
+        // NEW: Initialize cameraPositionState based on lastKnownCameraPosition or default
         val cameraPositionState = rememberCameraPositionState {
-            position = LatLng(39.8283, -98.5795).let { CameraPosition.fromLatLngZoom(it, 3f) }
+            position = lastKnownCameraPosition ?: LatLng(39.8283, -98.5795).let { CameraPosition.fromLatLngZoom(it, 3f) }
         }
 
         // Effect for showing Snackbar messages from ViewModel
@@ -155,27 +158,24 @@ class MainScreen(private val navController: NavHostController) {
             }
         }
 
-        // Effect for initial map centering
-        LaunchedEffect(currentUserLocation, showMapLoadingDialog) {
+        // Effect for map centering and initial load
+        LaunchedEffect(currentUserLocation, showMapLoadingDialog, mapLockedToUserLocation) { // Added mapLockedToUserLocation to trigger re-evaluation
             currentUserLocation?.let { loc ->
+                val targetLatLng = LatLng(loc.latitude, loc.longitude)
+                // Only animate to user's location if map is locked OR it's the initial loading phase
                 if (mapLockedToUserLocation || showMapLoadingDialog) {
                     cameraPositionState.animate(
-                        CameraUpdateFactory.newLatLngZoom(LatLng(loc.latitude, loc.longitude), 15f)
+                        CameraUpdateFactory.newLatLngZoom(targetLatLng, 15f)
                     )
                     // Log.d("MainScreen", "Camera moved to: ${loc.latitude}, ${loc.longitude}") // Removed for brevity
                 }
             }
         }
 
-        // Effect for map lock state changes
-        LaunchedEffect(mapLockedToUserLocation, currentUserLocation) {
-            if (mapLockedToUserLocation) {
-                currentUserLocation?.let { loc ->
-                    val newLatLng = LatLng(loc.latitude, loc.longitude)
-                    cameraPositionState.animate(
-                        CameraUpdateFactory.newLatLngZoom(newLatLng, 15f)
-                    )
-                }
+        // NEW: Observe camera idle events to save position to ViewModel
+        LaunchedEffect(cameraPositionState.isMoving) {
+            if (!cameraPositionState.isMoving) { // When camera stops moving (idle)
+                viewModel.setLastKnownCameraPosition(cameraPositionState.position)
             }
         }
 
@@ -436,7 +436,7 @@ class MainScreen(private val navController: NavHostController) {
                             bottom = 16.dp + innerPadding.calculateBottomPadding()
                         ),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally // CHANGED: Centered horizontally
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     LabeledFab(
                         onClick = { viewModel.navigateToShutdown() },
@@ -519,7 +519,7 @@ class MainScreen(private val navController: NavHostController) {
                             bottom = 16.dp + innerPadding.calculateBottomPadding()
                         ),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally // CHANGED: Centered horizontally
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     LabeledFab(
                         onClick = { if (isInActiveGroup) { viewModel.showToastEvent("Group Settings clicked!") } else { viewModel.showToastEvent("Must be in a Group to access Group Settings!") } },
@@ -738,8 +738,6 @@ class MainScreen(private val navController: NavHostController) {
                     .padding(bottom = 4.dp) // Maintain spacing from the FAB circle
                     .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
                     .background(if (enabled) fabEnabledColor else fabDisabledColor, RoundedCornerShape(8.dp))
-                // REMOVED .padding(horizontal = 1.dp, vertical = 1.dp) from this Box,
-                // as it's better to let the Text's intrinsic size define the box.
             ) {
                 Text(
                     text = label,
@@ -748,8 +746,7 @@ class MainScreen(private val navController: NavHostController) {
                     lineHeight = 4.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
-                    // REMOVED .fillMaxWidth() to prevent labels from stretching
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp) // Apply padding directly to Text
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                 )
             }
         }

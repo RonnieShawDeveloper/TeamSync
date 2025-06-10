@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import com.google.android.gms.maps.model.CameraPosition // NEW: Import CameraPosition
 
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -35,7 +36,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val auth: FirebaseAuth = FirebaseAuth.getInstance() // FirebaseAuth can be instantiated directly
 
     // UI State exposed to MainScreen
-    private val _currentUserId = MutableStateFlow<String?>(null) // NEW: Current user's UID
+    private val _currentUserId = MutableStateFlow<String?>(null)
     val currentUserId: StateFlow<String?> = _currentUserId.asStateFlow()
 
     private val _currentUserLocation = MutableStateFlow<Locations?>(null)
@@ -89,6 +90,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _navigationEvent = MutableSharedFlow<String>()
     val navigationEvent: SharedFlow<String> = _navigationEvent.asSharedFlow()
 
+    // NEW: State for last known camera position
+    private val _lastKnownCameraPosition = MutableStateFlow<CameraPosition?>(null)
+    val lastKnownCameraPosition: StateFlow<CameraPosition?> = _lastKnownCameraPosition.asStateFlow()
+
+
     // Data class for marker info to be displayed in the dialog
     data class MarkerDisplayInfo(
         val title: String,
@@ -108,12 +114,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         Log.d("MainViewModel", "MainViewModel initialized.")
 
         // Listen for Auth State changes to populate currentUserId
-        // This makes currentUserId a reliable source for the UI
         auth.addAuthStateListener { firebaseAuth ->
             _currentUserId.value = firebaseAuth.currentUser?.uid
             Log.d("MainViewModel", "Auth state changed, currentUserId: ${_currentUserId.value}")
-            // If user logs out, ensure models are cleared and dialog dismissed.
             if (firebaseAuth.currentUser == null) {
+                // Clear all UI-related state if user logs out
                 _currentUserModel.value = null
                 _currentUserLocation.value = null
                 _isInActiveGroup.value = false
@@ -121,11 +126,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _otherMembersLocations.value = emptyList()
                 _otherMembersProfiles.value = emptyMap()
                 _mapMarkers.value = emptyList()
-                _showMapLoadingDialog.value = false // Dismiss loading if user logs out
-                _showInstructionsOverlay.value = false // Dismiss instructions if user logs out
+                _showMapLoadingDialog.value = false
+                _showInstructionsOverlay.value = false
+                _lastKnownCameraPosition.value = null // NEW: Clear last known camera position on logout
             }
         }
-        // Immediately set the currentUserId if already logged in
         _currentUserId.value = auth.currentUser?.uid
 
 
@@ -192,7 +197,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     userResult.onSuccess { userModel ->
                         _currentUserModel.value = userModel
                         Log.d("MainViewModel", "Initial currentUserModel loaded: ${userModel.displayName}")
-                        // Check for instructions overlay visibility
                         if (userModel.mainInstructionsSeen != true) {
                             _showInstructionsOverlay.value = true
                         }
@@ -201,7 +205,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _userMessage.value = "Error loading user profile: ${e.message}"
                     }
                 } else {
-                    // If userId becomes null, clear currentUserModel
                     _currentUserModel.value = null
                     _showMapLoadingDialog.value = false
                     Log.d("MainViewModel", "Dismissed map loading dialog as no authenticated user found.")
@@ -236,6 +239,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // --- Actions/Event Handlers ---
+
+    /**
+     * Updates the last known camera position of the map.
+     * This should be called from the UI (e.g., onCameraIdle).
+     */
+    fun setLastKnownCameraPosition(cameraPosition: CameraPosition) {
+        _lastKnownCameraPosition.value = cameraPosition
+        Log.d("MainViewModel", "Last known camera position updated: ${cameraPosition.target.latitude}, ${cameraPosition.target.longitude}, Zoom: ${cameraPosition.zoom}")
+    }
 
     fun toggleMapLock() {
         _mapLockedToUserLocation.value = !_mapLockedToUserLocation.value
@@ -294,7 +306,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         groupMonitorService.clearUserMessage()
     }
 
-    // NEW: Navigation functions
+    // Navigation functions
     fun navigateToShutdown() {
         viewModelScope.launch { _navigationEvent.emit("shutdown") }
     }
@@ -322,6 +334,4 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateToGroupsList() {
         viewModelScope.launch { _navigationEvent.emit("groups_list") }
     }
-
-    // You can add more navigation functions as needed for other screens
 }

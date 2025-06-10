@@ -13,7 +13,7 @@ android {
         minSdk = 29
         targetSdk = 35
         versionCode = 1
-        versionName = "6.4"
+        versionName = "6.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -91,6 +91,9 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore-ktx")
     // Firebase Storage
     implementation("com.google.firebase:firebase-storage-ktx")
+
+    // NEW: Firebase Remote Config
+    implementation("com.google.firebase:firebase-config-ktx")
 
     // Required permissions
     implementation("androidx.activity:activity-ktx:1.8.2")

@@ -67,6 +67,9 @@ dependencies {
     // Compose Material3 (for modern Material Design components)
     implementation("androidx.compose.material3:material3:1.3.2")
 
+    // ViewModel for Compose
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0")
+
     // Image loading library (Coil is recommended for Compose)
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation("io.coil-kt:coil:2.6.0")

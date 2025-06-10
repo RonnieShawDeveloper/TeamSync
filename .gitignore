@@ -24,6 +24,7 @@ local.properties
 /app/.externalNativeBuild/
 /app/local.properties
 /app/.DS_Store
+/app/release/ # Exclude the entire release directory
 
 # Android Studio project files
 *.iml

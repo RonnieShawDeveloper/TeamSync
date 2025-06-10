@@ -170,7 +170,7 @@ fun SignupScreen(navController: NavHostController) {
                 firestore.collection("users").document(userId).set(user)
                     .addOnSuccessListener {
                         isLoading = false
-                        navController.navigate(NavRoutes.MAIN) {
+                        navController.navigate(NavRoutes.PRE_CHECK) {
                             popUpTo(NavRoutes.LOGIN) { inclusive = true }
                         }
                     }

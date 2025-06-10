@@ -23,7 +23,8 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import com.google.android.gms.maps.model.CameraPosition // NEW: Import CameraPosition
+import com.google.android.gms.maps.model.CameraPosition
+import com.artificialinsightsllc.teamsync.Navigation.NavRoutes // NEW: Import NavRoutes
 
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -32,8 +33,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as TeamSyncApplication
     private val groupMonitorService: GroupMonitorService = app.groupMonitorService
     private val markerMonitorService: MarkerMonitorService = app.markerMonitorService
-    private val firestoreService: FirestoreService = FirestoreService() // FirestoreService can be instantiated directly
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance() // FirebaseAuth can be instantiated directly
+    private val firestoreService: FirestoreService = FirestoreService()
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 
     // UI State exposed to MainScreen
     private val _currentUserId = MutableStateFlow<String?>(null)
@@ -90,19 +91,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _navigationEvent = MutableSharedFlow<String>()
     val navigationEvent: SharedFlow<String> = _navigationEvent.asSharedFlow()
 
-    // NEW: State for last known camera position
     private val _lastKnownCameraPosition = MutableStateFlow<CameraPosition?>(null)
     val lastKnownCameraPosition: StateFlow<CameraPosition?> = _lastKnownCameraPosition.asStateFlow()
 
 
-    // Data class for marker info to be displayed in the dialog
     data class MarkerDisplayInfo(
         val title: String,
         val timestamp: Long,
         val speed: Float?,
         val bearing: Float?,
         val profilePhotoUrl: String?,
-        val latLng: com.google.android.gms.maps.model.LatLng?, // Use fully qualified name to avoid conflict
+        val latLng: com.google.android.gms.maps.model.LatLng?,
         val mapMarker: MapMarker? = null,
         val userId: String? = null
     )
@@ -113,12 +112,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         Log.d("MainViewModel", "MainViewModel initialized.")
 
-        // Listen for Auth State changes to populate currentUserId
         auth.addAuthStateListener { firebaseAuth ->
             _currentUserId.value = firebaseAuth.currentUser?.uid
             Log.d("MainViewModel", "Auth state changed, currentUserId: ${_currentUserId.value}")
             if (firebaseAuth.currentUser == null) {
-                // Clear all UI-related state if user logs out
                 _currentUserModel.value = null
                 _currentUserLocation.value = null
                 _isInActiveGroup.value = false
@@ -128,13 +125,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _mapMarkers.value = emptyList()
                 _showMapLoadingDialog.value = false
                 _showInstructionsOverlay.value = false
-                _lastKnownCameraPosition.value = null // NEW: Clear last known camera position on logout
+                _lastKnownCameraPosition.value = null
             }
         }
         _currentUserId.value = auth.currentUser?.uid
 
 
-        // Collect from GroupMonitorService's flows
         viewModelScope.launch {
             groupMonitorService.currentUserLocation.collectLatest { location ->
                 _currentUserLocation.value = location
@@ -181,7 +177,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Collect from MarkerMonitorService's flow
         viewModelScope.launch {
             markerMonitorService.mapMarkers.collectLatest { markers ->
                 _mapMarkers.value = markers
@@ -189,7 +184,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Fetch current user model initially (now observes _currentUserId)
         viewModelScope.launch {
             _currentUserId.collectLatest { userId ->
                 if (userId != null) {
@@ -212,7 +206,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Countdown Timer Logic - now observing _activeGroup
         viewModelScope.launch {
             _activeGroup.collectLatest { group ->
                 val endTime = group?.groupEndTimestamp
@@ -240,10 +233,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Actions/Event Handlers ---
 
-    /**
-     * Updates the last known camera position of the map.
-     * This should be called from the UI (e.g., onCameraIdle).
-     */
     fun setLastKnownCameraPosition(cameraPosition: CameraPosition) {
         _lastKnownCameraPosition.value = cameraPosition
         Log.d("MainViewModel", "Last known camera position updated: ${cameraPosition.target.latitude}, ${cameraPosition.target.longitude}, Zoom: ${cameraPosition.zoom}")
@@ -308,30 +297,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Navigation functions
     fun navigateToShutdown() {
-        viewModelScope.launch { _navigationEvent.emit("shutdown") }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.SHUTDOWN) }
     }
 
     fun navigateToUserSettings() {
-        viewModelScope.launch { _navigationEvent.emit("user_settings") }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.USER_SETTINGS) }
     }
 
     fun navigateToAddMapMarker() {
-        viewModelScope.launch { _navigationEvent.emit("add_map_marker") }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.ADD_MAP_MARKER) }
     }
 
     fun navigateToCreateGroup() {
-        viewModelScope.launch { _navigationEvent.emit("create_group") }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.CREATE_GROUP) }
     }
 
     fun navigateToGeofence() {
-        viewModelScope.launch { _navigationEvent.emit("geofence") }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.GEOFENCE) }
     }
 
     fun navigateToTeamList() {
-        viewModelScope.launch { _navigationEvent.emit("team_list") }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.TEAM_LIST) }
     }
 
     fun navigateToGroupsList() {
-        viewModelScope.launch { _navigationEvent.emit("groups_list") }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.GROUPS_LIST) }
+    }
+
+    // NEW: Navigation function for NotificationsScreen
+    fun navigateToNotifications() {
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.NOTIFICATIONS) } // Will be defined in NavRoutes.kt
     }
 }

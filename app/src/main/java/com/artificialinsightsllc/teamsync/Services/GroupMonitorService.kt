@@ -28,6 +28,8 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import com.artificialinsightsllc.teamsync.TeamSyncApplication // Import TeamSyncApplication
+import com.google.firebase.messaging.FirebaseMessaging // NEW: Import FirebaseMessaging
+
 
 class GroupMonitorService(
     internal val context: Context,
@@ -73,7 +75,6 @@ class GroupMonitorService(
     private val _groupDetailsStatus = MutableStateFlow(GroupDetailsStatus.LOADING)
     val groupDetailsStatus: StateFlow<GroupDetailsStatus> = _groupDetailsStatus.asStateFlow()
 
-    // NEW: StateFlow for the current user's live location
     private val _currentUserLocation = MutableStateFlow<Locations?>(null)
     val currentUserLocation: StateFlow<Locations?> = _currentUserLocation.asStateFlow()
 
@@ -84,7 +85,6 @@ class GroupMonitorService(
     private var activeGroupUsersLocationsListener: ListenerRegistration? = null // Corrected name for scalable location queries
     private var otherMembersProfilesListeners: MutableMap<String, ListenerRegistration> = mutableMapOf()
 
-    // NEW: Listener for the current user's location
     private var currentUserLocationListener: ListenerRegistration? = null
 
     private val _uiPermissionsGranted = MutableStateFlow(false)
@@ -92,9 +92,7 @@ class GroupMonitorService(
 
     private var locationTrackingIntentJob: Job? = null
 
-    // Variable to store the last processed active group ID to prevent redundant listener re-attachments
     private var lastProcessedActiveGroupId: String? = null
-    // New variable to track the actively monitored user IDs for profiles (for cleanup)
     private var activelyMonitoredProfileUserIds: Set<String> = emptySet()
 
 
@@ -121,53 +119,47 @@ class GroupMonitorService(
         Log.d("GroupMonitorService", "Stopped other members' profile listeners and reset activelyMonitoredProfileUserIds.")
     }
 
-    private fun stopActiveGroupUsersLocationsListener() { // Renamed from stopOtherMembersLocationsListener
+    private fun stopActiveGroupUsersLocationsListener() {
         activeGroupUsersLocationsListener?.remove()
         activeGroupUsersLocationsListener = null
         _otherMembersLocations.value = emptyList()
         Log.d("GroupMonitorService", "Stopped active group users' locations listener.")
     }
 
-    private fun stopMapRelatedListeners() { // NEW: A consolidated function to stop all map-related listeners
-        stopActiveGroupUsersLocationsListener() // Stops the main map location listener
-        stopOtherMembersProfilesListeners() // Stops individual profile listeners for map markers
-        markerMonitorService.stopMonitoringMarkers() // Stops map marker listener
+    private fun stopMapRelatedListeners() {
+        stopActiveGroupUsersLocationsListener()
+        stopOtherMembersProfilesListeners()
+        markerMonitorService.stopMonitoringMarkers()
         Log.d("GroupMonitorService", "Stopped all map-related listeners.")
     }
 
     fun stopAllListeners() {
-        // Stop all top-level listeners
         currentUserGroupMembershipsListener?.remove()
         currentUserGroupMembershipsListener = null
         currentUserProfileListener?.remove()
         currentUserProfileListener = null
         activeGroupDetailsListener?.remove()
         activeGroupDetailsListener = null
-        // NEW: Stop the current user's location listener
         currentUserLocationListener?.remove()
         currentUserLocationListener = null
 
-
-        // Stop all map-related data listeners for other members
         stopMapRelatedListeners()
 
         Log.d("GroupMonitorService", "Stopped all Firestore listeners.")
 
-        // Reset all relevant StateFlows to their initial/empty state
         _groupDetailsStatus.value = GroupDetailsStatus.LOADING
         _activeGroup.value = null
         _activeGroupMember.value = null
         _isInActiveGroup.value = false
-        _otherGroupMembers.value = emptyList() // Ensure TeamList data is also cleared
-        _otherMembersLocations.value = emptyList() // Ensure map locations are cleared
-        _otherMembersProfiles.value = emptyMap() // Ensure map profiles are cleared
-        _effectiveLocationUpdateInterval.value = 300000L // Reset to default
-        _currentUserLocation.value = null // NEW: Clear current user's location
+        _otherGroupMembers.value = emptyList()
+        _otherMembersLocations.value = emptyList()
+        _otherMembersProfiles.value = emptyMap()
+        _effectiveLocationUpdateInterval.value = 300000L
+        _currentUserLocation.value = null
 
-        lastProcessedActiveGroupId = null // Reset this on full stop
-        locationTrackingIntentJob?.cancel() // Cancel any pending intent dispatches
+        lastProcessedActiveGroupId = null
+        locationTrackingIntentJob?.cancel()
 
-        // Ensure LocationTrackingService is stopped completely
         sendLocationTrackingIntentDebounced(0L, false, true, null, null)
     }
 
@@ -181,20 +173,15 @@ class GroupMonitorService(
         memberId: String?,
         activeTrackingGroupId: String?
     ) {
-        locationTrackingIntentJob?.cancel() // Cancel any previous pending intent
+        locationTrackingIntentJob?.cancel()
         locationTrackingIntentJob = monitorScope.launch {
-            delay(100) // Small delay to coalesce rapid state changes
+            delay(100)
             sendLocationTrackingIntent(interval, isSharing, stopServiceCompletely, memberId, activeTrackingGroupId)
         }
     }
 
     /**
      * Sends the actual intent to LocationTrackingService.
-     * @param interval Desired location update interval.
-     * @param isSharing True if location should be actively shared.
-     * @param stopServiceCompletely If true, sends ACTION_STOP_SERVICE, otherwise ACTION_UPDATE_TRACKING_STATE.
-     * @param memberId The Firestore document ID of the active GroupMembers record.
-     * @param activeTrackingGroupId The ID of the group the user is currently actively tracking for.
      */
     private fun sendLocationTrackingIntent(
         interval: Long,
@@ -224,36 +211,31 @@ class GroupMonitorService(
      * This should be called once from `TeamSyncApplication.onCreate()`.
      */
     fun startMonitoring() {
-        // Ensure the AuthStateListener is added only once.
-        // It's the primary entry point for managing listeners based on auth state changes.
-        if (currentUserProfileListener == null) { // This check prevents adding the listener multiple times if startMonitoring is called more than once (e.g., from multiple Activities)
+        if (currentUserProfileListener == null) {
             auth.addAuthStateListener { firebaseAuth ->
                 val user = firebaseAuth.currentUser
                 if (user != null) {
                     Log.d("GroupMonitorService", "Auth State Listener: User logged in: ${user.uid}. Starting primary data listeners.")
                     monitorScope.launch {
-                        // These two calls are the main drivers for managing group state and tracking:
-                        listenForCurrentUserProfile(user.uid) // This drives the active group logic and map listeners
-                        listenForCurrentUserGroupMemberships(user.uid) // This provides the full list of user's memberships for other screens
-                        // NEW: Listen for the current user's location
+                        listenForCurrentUserProfile(user.uid)
+                        listenForCurrentUserGroupMemberships(user.uid)
                         listenForCurrentUserLocation(user.uid)
+                        manageFCMTokenAndSubscriptions(user.uid) // NEW: Call FCM management here
                     }
                 } else {
                     Log.d("GroupMonitorService", "Auth State Listener: User logged out. Stopping all monitoring.")
-                    stopAllListeners() // This will also stop LocationTrackingService
+                    stopAllListeners()
                     _userMessage.value = "You have been logged out."
                 }
             }
-            // Trigger an immediate evaluation if a user is already logged in when startMonitoring is called.
-            // This handles cases where `onAuthStateChanged` might not fire immediately for already active sessions.
             val initialUser = auth.currentUser
             if (initialUser != null) {
                 Log.d("GroupMonitorService", "startMonitoring: User already logged in on initial call: ${initialUser.uid}. Initiating primary listeners directly.")
                 monitorScope.launch {
                     listenForCurrentUserProfile(initialUser.uid)
                     listenForCurrentUserGroupMemberships(initialUser.uid)
-                    // NEW: Listen for the current user's location on initial load too
                     listenForCurrentUserLocation(initialUser.uid)
+                    manageFCMTokenAndSubscriptions(initialUser.uid) // NEW: Call FCM management here on initial app start
                 }
             } else {
                 Log.d("GroupMonitorService", "startMonitoring: No user logged in on initial call. Waiting for AuthStateListener.")
@@ -262,9 +244,6 @@ class GroupMonitorService(
             Log.d("GroupMonitorService", "startMonitoring: AuthStateListener already active. Skipping re-attachment.")
         }
 
-
-        // This 'combine' block is responsible for deciding WHEN LocationTrackingService should run
-        // and with what parameters, based on current app state and permissions.
         monitorScope.launch {
             val app = context.applicationContext as TeamSyncApplication
 
@@ -274,18 +253,15 @@ class GroupMonitorService(
             var lastDesiredActiveTrackingGroupId: String? = null
 
             combine(
-                _activeGroupMember, // Driven by selectedActiveGroupId from user profile
-                _activeGroup,       // Driven by group details listener
-                _groupDetailsStatus, // Driven by group details listener
-                _uiPermissionsGranted, // Driven by UI (permissions check)
-                app.locationServiceRunningState // Actual state of LocationTrackingService
+                _activeGroupMember,
+                _activeGroup,
+                _groupDetailsStatus,
+                _uiPermissionsGranted,
+                app.locationServiceRunningState
             ) { member, group, detailsStatus, uiPermissionsGranted, actualServiceStateTriple ->
                 val actualServiceIsRunning = actualServiceStateTriple.first
                 val actualTrackingInterval = actualServiceStateTriple.second
                 val actualTrackingMemberId = actualServiceStateTriple.third
-
-                // We don't need currentUserId here, as it's passed to relevant functions
-                // val currentUserId = auth.currentUser?.uid
 
                 val memberIsActive = member != null && member.unjoinedTimestamp == null
                 val groupIsValidAndActive = group != null && (group.groupEndTimestamp?.let { it > System.currentTimeMillis() } ?: true)
@@ -298,37 +274,30 @@ class GroupMonitorService(
                 val desiredMemberId: String?
                 val desiredActiveTrackingGroupId: String?
 
-                // Determine desired state based on active member, group status, and permissions
                 if (memberIsActive && groupIsValidAndActive && uiPermissionsGranted) {
                     val nonNullMember = member!!
                     val nonNullGroup = group!!
                     desiredServiceRunning = true
                     desiredInterval = nonNullMember.personalLocationUpdateIntervalMillis
                         ?: nonNullGroup.locationUpdateIntervalMillis
-                                ?: 300000L // Fallback default
+                                ?: 300000L
                     desiredMemberId = nonNullMember.id
-                    desiredActiveTrackingGroupId = nonNullGroup.groupID // User is actively tracking for THIS group
+                    desiredActiveTrackingGroupId = nonNullGroup.groupID
 
-                    _isInActiveGroup.value = true // Indicate active group is present for UI
-                    // Map-related listeners (other members locations/profiles, map markers)
-                    // are now started/stopped by listenForCurrentUserProfile when it sets _activeGroup.
-                    // This combine flow only controls the LocationTrackingService.
+                    _isInActiveGroup.value = true
                     Log.d("GroupMonitorService", "Group ACTIVE & member active & perms granted. Desired service state: RUNNING, interval: $desiredInterval, activeTrackingGroupId: $desiredActiveTrackingGroupId.")
                 } else {
-                    desiredServiceRunning = false // Conditions not met for active tracking
+                    desiredServiceRunning = false
                     desiredInterval = 0L
                     desiredMemberId = null
-                    desiredActiveTrackingGroupId = null // Not actively tracking for any group
+                    desiredActiveTrackingGroupId = null
 
-                    _isInActiveGroup.value = false // Indicate no active group for tracking purposes
-                    // Map-related listeners are now stopped by listenForCurrentUserProfile when it clears _activeGroup.
+                    _isInActiveGroup.value = false
                     Log.d("GroupMonitorService", "Conditions for active tracking NOT met. Desired service state: STOPPED.")
                 }
 
-                _effectiveLocationUpdateInterval.value = desiredInterval // Update internal flow for UI
+                _effectiveLocationUpdateInterval.value = desiredInterval
 
-                // Now, dispatch intent ONLY if desired state differs from actual state
-                // This logic ensures we don't send redundant start/stop/update commands
                 val shouldSendStartOrUpdateIntent = desiredServiceRunning &&
                         (!actualServiceIsRunning ||
                                 desiredInterval != lastDesiredInterval ||
@@ -359,11 +328,54 @@ class GroupMonitorService(
 
 
     /**
+     * NEW: Manages FCM token retrieval and topic subscriptions.
+     * This function should be called upon successful user authentication.
+     */
+    private suspend fun manageFCMTokenAndSubscriptions(userId: String) {
+        Log.d("GroupMonitorService", "Managing FCM token and subscriptions for user: $userId")
+        // 1. Get current FCM token
+        val fcmToken = try {
+            FirebaseMessaging.getInstance().token.await()
+        } catch (e: Exception) {
+            Log.e("GroupMonitorService", "Failed to get FCM token: ${e.message}", e)
+            null
+        }
+
+        if (fcmToken != null) {
+            Log.d("GroupMonitorService", "FCM Token retrieved: $fcmToken")
+            // 2. Save token to user profile if it's new or changed
+            val currentUserProfile = firestoreService.getUserProfile(userId).getOrNull()
+            if (currentUserProfile == null || currentUserProfile.fcmToken != fcmToken) {
+                val updatedUser = (currentUserProfile ?: UserModel(authId = userId, userId = userId)).copy(fcmToken = fcmToken)
+                firestoreService.saveUserProfile(updatedUser)
+                    .onSuccess { Log.d("GroupMonitorService", "FCM token saved/updated in user profile for $userId.") }
+                    .onFailure { e -> Log.e("GroupMonitorService", "Failed to save FCM token for $userId: ${e.message}", e) }
+            } else {
+                Log.d("GroupMonitorService", "FCM token for $userId is already up-to-date in Firestore.")
+            }
+
+            // 3. Subscribe to global "TeamSync" topic
+            try {
+                FirebaseMessaging.getInstance().subscribeToTopic("TeamSync").await()
+                Log.d("GroupMonitorService", "Subscribed to TeamSync topic.")
+            } catch (e: Exception) {
+                Log.e("GroupMonitorService", "Failed to subscribe to TeamSync topic: ${e.message}", e)
+            }
+
+            // 4. Manage subscriptions for active groups
+            // This part will be enhanced in a later step when we can dynamically manage group topic subscriptions.
+            // For now, we'll ensure it runs when memberships are updated.
+        } else {
+            Log.w("GroupMonitorService", "FCM token is null, skipping token saving and topic subscriptions.")
+        }
+    }
+
+
+    /**
      * Listens for changes to the current user's UserModel document, primarily for `selectedActiveGroupId`.
-     * This is the authoritative source for the user's actively selected group.
      */
     private fun listenForCurrentUserProfile(userId: String) {
-        currentUserProfileListener?.remove() // Remove any old listener
+        currentUserProfileListener?.remove()
 
         Log.d("GroupMonitorService", "listenForCurrentUserProfile: Attaching listener for user profile $userId.")
         currentUserProfileListener = db.collection("users").document(userId)
@@ -371,24 +383,22 @@ class GroupMonitorService(
                 Log.d("GroupMonitorService", "listenForCurrentUserProfile: Snapshot received for user profile $userId. Exists: ${snapshot?.exists()}, Error: ${e?.message}")
                 if (e != null) {
                     Log.w("GroupMonitorService", "Listen for user profile $userId failed.", e)
-                    // On error, assume no active group for tracking
                     val oldStatus = _groupDetailsStatus.value
                     if (oldStatus != GroupDetailsStatus.ERROR) {
                         _groupDetailsStatus.value = GroupDetailsStatus.ERROR
                         Log.d("GroupMonitorService", "Group details status changed: $oldStatus -> ERROR due to user profile listener error.")
                     }
-                    // Explicitly clear all active group state if there's a listener error
                     Log.d("GroupMonitorService", "Clearing active group state due to user profile listener error.")
                     _activeGroupMember.value = null
                     _activeGroup.value = null
                     _isInActiveGroup.value = false
-                    stopMapRelatedListeners() // Stops all map-related data listeners
-                    lastProcessedActiveGroupId = null // Ensure this is reset
+                    stopMapRelatedListeners()
+                    lastProcessedActiveGroupId = null
                     activeGroupDetailsListener?.remove()
                     activeGroupDetailsListener = null
-                    _otherMembersLocations.value = emptyList() // Clear map-related data
+                    _otherMembersLocations.value = emptyList()
                     _otherMembersProfiles.value = emptyMap()
-                    _currentUserLocation.value = null // NEW: Clear current user's location
+                    _currentUserLocation.value = null
                     return@addSnapshotListener
                 }
 
@@ -397,18 +407,15 @@ class GroupMonitorService(
                     val newSelectedActiveGroupId = userProfile?.selectedActiveGroupId
                     Log.d("GroupMonitorService", "User profile updated. New selectedActiveGroupId: $newSelectedActiveGroupId, Last processed: $lastProcessedActiveGroupId")
 
-                    // ONLY re-evaluate active group state if the selectedActiveGroupId has truly changed
-                    // or if the current active group has expired/been deleted (checked via _groupDetailsStatus)
-                    val currentActiveGroupIdInState = _activeGroup.value?.groupID // Current group actively being displayed on map
+                    val currentActiveGroupIdInState = _activeGroup.value?.groupID
                     val shouldReevaluateBecauseGroupExpiredOrDeleted = (newSelectedActiveGroupId == currentActiveGroupIdInState) &&
                             (_groupDetailsStatus.value == GroupDetailsStatus.EXPIRED || _groupDetailsStatus.value == GroupDetailsStatus.NOT_FOUND)
 
                     if (newSelectedActiveGroupId != lastProcessedActiveGroupId || shouldReevaluateBecauseGroupExpiredOrDeleted) {
                         Log.d("GroupMonitorService", "Selected active group ID changed or current group expired/deleted: $lastProcessedActiveGroupId -> $newSelectedActiveGroupId. Re-evaluating active group for tracking. Re-eval reason: shouldReevaluateBecauseGroupExpiredOrDeleted=$shouldReevaluateBecauseGroupExpiredOrDeleted")
-                        lastProcessedActiveGroupId = newSelectedActiveGroupId // Update last processed ID
+                        lastProcessedActiveGroupId = newSelectedActiveGroupId
 
                         if (newSelectedActiveGroupId != null && newSelectedActiveGroupId.isNotBlank()) {
-                            // User has selected an active group, proceed to find membership and details
                             monitorScope.launch {
                                 val membershipsResult = firestoreService.getGroupMembershipsForUser(userId).getOrNull() ?: emptyList()
                                 val selectedMembership = membershipsResult.find {
@@ -418,18 +425,18 @@ class GroupMonitorService(
                                 if (selectedMembership != null) {
                                     Log.d("GroupMonitorService", "Found active membership for selected group: ${selectedMembership.groupId}. Setting as primary active.")
                                     _activeGroupMember.value = selectedMembership
-                                    _groupDetailsStatus.value = GroupDetailsStatus.LOADING // Set to LOADING state for group details fetch
-                                    listenForActiveGroupDetails(selectedMembership.groupId) // Listen for group details
-                                    listenForActiveGroupUsersLocations(selectedMembership.groupId, userId) // Start scalable location listener
-                                    markerMonitorService.startMonitoringMarkers(selectedMembership.groupId) // Start map marker listener
+                                    _groupDetailsStatus.value = GroupDetailsStatus.LOADING
+                                    listenForActiveGroupDetails(selectedMembership.groupId)
+                                    listenForActiveGroupUsersLocations(selectedMembership.groupId, userId)
+                                    markerMonitorService.startMonitoringMarkers(selectedMembership.groupId)
+                                    // RE-SUBSCRIBE/UNSUBSCRIBE TO GROUP TOPICS HERE when active memberships change
+                                    manageGroupTopicSubscriptions(userId, membershipsResult) // NEW: Call manage group topics
                                 } else {
-                                    // Selected group ID exists in profile, but no active membership found for it.
-                                    // This means the user is no longer an active member of that specifically selected group.
                                     Log.d("GroupMonitorService", "Selected active group ($newSelectedActiveGroupId) has no active membership for user $userId. Clearing active group state.")
                                     _activeGroupMember.value = null
                                     _activeGroup.value = null
                                     _isInActiveGroup.value = false
-                                    stopMapRelatedListeners() // Stops all map-related data listeners
+                                    stopMapRelatedListeners()
                                     val oldStatus = _groupDetailsStatus.value
                                     if (oldStatus != GroupDetailsStatus.NOT_FOUND) {
                                         _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
@@ -437,22 +444,22 @@ class GroupMonitorService(
                                     }
                                     activeGroupDetailsListener?.remove()
                                     activeGroupDetailsListener = null
-                                    _otherMembersLocations.value = emptyList() // Clear map-related data
+                                    _otherMembersLocations.value = emptyList()
                                     _otherMembersProfiles.value = emptyMap()
-                                    _currentUserLocation.value = null // NEW: Clear current user's location
-                                    // Clear selectedActiveGroupId in user profile in Firestore
+                                    _currentUserLocation.value = null
                                     monitorScope.launch {
                                         firestoreService.updateUserSelectedActiveGroup(userId, null)
                                     }
+                                    // RE-SUBSCRIBE/UNSUBSCRIBE TO GROUP TOPICS HERE when active memberships change (after clearing active group)
+                                    manageGroupTopicSubscriptions(userId, membershipsResult) // NEW: Call manage group topics
                                 }
                             }
                         } else {
-                            // newSelectedActiveGroupId is null or blank - user explicitly wants no active group.
                             Log.d("GroupMonitorService", "New selected active group ID is null/blank. Clearing active group state for tracking.")
                             _activeGroupMember.value = null
                             _activeGroup.value = null
                             _isInActiveGroup.value = false
-                            stopMapRelatedListeners() // Stops all map-related data listeners
+                            stopMapRelatedListeners()
                             val oldStatus = _groupDetailsStatus.value
                             if (oldStatus != GroupDetailsStatus.NOT_FOUND) {
                                 _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
@@ -460,28 +467,33 @@ class GroupMonitorService(
                             }
                             activeGroupDetailsListener?.remove()
                             activeGroupDetailsListener = null
-                            _otherMembersLocations.value = emptyList() // Clear map-related data
+                            _otherMembersLocations.value = emptyList()
                             _otherMembersProfiles.value = emptyMap()
-                            _currentUserLocation.value = null // NEW: Clear current user's location
+                            _currentUserLocation.value = null
+                            // RE-SUBSCRIBE/UNSUBSCRIBE TO GROUP TOPICS HERE
+                            monitorScope.launch {
+                                val memberships = firestoreService.getGroupMembershipsForUser(userId).getOrNull() ?: emptyList()
+                                manageGroupTopicSubscriptions(userId, memberships) // NEW: Call manage group topics
+                            }
                         }
                     } else {
                         Log.d("GroupMonitorService", "Selected active group ID unchanged ($newSelectedActiveGroupId). No re-evaluation of active group state needed.")
-                        // If selected ID is unchanged, and it's not null, ensure the group details listener is still active
-                        // This handles cases where the group itself might expire or be deleted while selected.
                         if (newSelectedActiveGroupId != null && newSelectedActiveGroupId.isNotBlank()) {
-                            // If _activeGroup or _groupDetailsStatus implies a problem, re-trigger
                             if (_activeGroup.value == null || _groupDetailsStatus.value == GroupDetailsStatus.NOT_FOUND || _groupDetailsStatus.value == GroupDetailsStatus.EXPIRED) {
                                 Log.d("GroupMonitorService", "Active group document might be missing or expired, re-attaching listeners for $newSelectedActiveGroupId.")
                                 _groupDetailsStatus.value = GroupDetailsStatus.LOADING
                                 listenForActiveGroupDetails(newSelectedActiveGroupId)
                                 listenForActiveGroupUsersLocations(newSelectedActiveGroupId, userId)
                                 markerMonitorService.startMonitoringMarkers(newSelectedActiveGroupId)
+                                // Only call manageGroupTopicSubscriptions if a user profile change has triggered it, and we are managing group state
+                                monitorScope.launch {
+                                    val memberships = firestoreService.getGroupMembershipsForUser(userId).getOrNull() ?: emptyList()
+                                    manageGroupTopicSubscriptions(userId, memberships)
+                                }
                             } else {
                                 Log.d("GroupMonitorService", "Active group ($newSelectedActiveGroupId) appears healthy. Skipping listener re-attachment.")
                             }
                         } else {
-                            // If newSelectedActiveGroupId is null, and it's unchanged (meaning it was already null),
-                            // ensure everything is in the NOT_FOUND/stopped state.
                             val oldStatus = _groupDetailsStatus.value
                             if (oldStatus != GroupDetailsStatus.NOT_FOUND) {
                                 _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
@@ -493,13 +505,17 @@ class GroupMonitorService(
                             stopMapRelatedListeners()
                             activeGroupDetailsListener?.remove()
                             activeGroupDetailsListener = null
-                            _otherMembersLocations.value = emptyList() // Clear map-related data
+                            _otherMembersLocations.value = emptyList()
                             _otherMembersProfiles.value = emptyMap()
-                            _currentUserLocation.value = null // NEW: Clear current user's location
+                            _currentUserLocation.value = null
+                            // RE-SUBSCRIBE/UNSUBSCRIBE TO GROUP TOPICS HERE
+                            monitorScope.launch {
+                                val memberships = firestoreService.getGroupMembershipsForUser(userId).getOrNull() ?: emptyList()
+                                manageGroupTopicSubscriptions(userId, memberships) // NEW: Call manage group topics
+                            }
                         }
                     }
                 } else {
-                    // User profile document does not exist, treat as no active group.
                     Log.d("GroupMonitorService", "User profile document not found. Clearing active group state.")
                     _activeGroupMember.value = null
                     _activeGroup.value = null
@@ -512,23 +528,19 @@ class GroupMonitorService(
                     }
                     activeGroupDetailsListener?.remove()
                     activeGroupDetailsListener = null
-                    _otherMembersLocations.value = emptyList() // Clear map-related data
+                    _otherMembersLocations.value = emptyList()
                     _otherMembersProfiles.value = emptyMap()
-                    _currentUserLocation.value = null // NEW: Clear current user's location
+                    _currentUserLocation.value = null
                 }
             }
     }
 
     /**
      * Listens for changes to the current user's group memberships from Firestore.
-     * This listener updates the list of all active/inactive memberships a user is part of,
-     * primarily for screens like `TeamListScreen` and `GroupsListScreen`.
-     * It does *not* directly drive the "active group for tracking" logic on the map.
      */
     private fun listenForCurrentUserGroupMemberships(userId: String) {
-        // Ensure this listener is only attached once or if userId changes
         if (currentUserGroupMembershipsListener == null || (auth.currentUser?.uid != null && currentUserGroupMembershipsListener?.equals(userId) == false)) {
-            currentUserGroupMembershipsListener?.remove() // Remove old listener if exists for a different user
+            currentUserGroupMembershipsListener?.remove()
             Log.d("GroupMonitorService", "listenForCurrentUserGroupMemberships: Attaching listener for user $userId's group memberships (for TeamList/GroupsList Data).")
 
             currentUserGroupMembershipsListener = db.collection("groupMembers")
@@ -537,7 +549,7 @@ class GroupMonitorService(
                     Log.d("GroupMonitorService", "listenForCurrentUserGroupMemberships (Secondary Listener): Listener triggered for user $userId. Error: ${e?.message}, Snapshots: ${snapshots?.size()}")
                     if (e != null) {
                         Log.w("GroupMonitorService", "Secondary listen for current user's group memberships failed.", e)
-                        _otherGroupMembers.value = emptyList() // Clear list on error
+                        _otherGroupMembers.value = emptyList()
                         return@addSnapshotListener
                     }
 
@@ -547,12 +559,61 @@ class GroupMonitorService(
                         }
                         val activeMembershipsFromAll = allMemberships.filter { it.unjoinedTimestamp == null }
 
-                        // Update _otherGroupMembers for TeamListScreen etc.
                         _otherGroupMembers.value = activeMembershipsFromAll
                         Log.d("GroupMonitorService", "Updated _otherGroupMembers with ${activeMembershipsFromAll.size} active memberships for TeamList/GroupsList.")
+
+                        // NEW: Also manage group topic subscriptions when memberships change
+                        // This ensures that if a user is added to a group or leaves a group,
+                        // their FCM subscriptions are updated accordingly.
+                        monitorScope.launch {
+                            manageGroupTopicSubscriptions(userId, activeMembershipsFromAll)
+                        }
                     }
                 }
         }
+    }
+
+    /**
+     * NEW: Manages FCM topic subscriptions/unsubscriptions for group channels.
+     * This ensures the user is subscribed to topics for groups they are actively members of,
+     * and unsubscribed from groups they have left.
+     *
+     * @param userId The ID of the current user.
+     * @param currentActiveMemberships The list of all currently active group memberships for the user.
+     */
+    private suspend fun manageGroupTopicSubscriptions(userId: String, currentActiveMemberships: List<GroupMembers>) {
+        val currentSubscribedTopics = mutableSetOf<String>()
+        // In a real app, you'd ideally keep track of currently subscribed topics
+        // to avoid unnecessary API calls. For simplicity here, we'll resubscribe
+        // to all active ones and rely on FCM's idempotency.
+        // For unsubscribing, you'd need a more robust tracking system or query FCM directly.
+        // For now, we'll focus on ensuring active subscriptions are in place.
+
+        // Get all groups the user is currently a member of.
+        val activeGroupIds = currentActiveMemberships.map { it.groupId }.toSet()
+
+        // Fetch group details for active groups to get fcmName
+        val activeGroups = firestoreService.getGroupsByIds(activeGroupIds.toList()).getOrNull() ?: emptyList()
+
+        // Subscribe to active group topics
+        activeGroups.forEach { group ->
+            val topicName = "group_${group.groupID}"
+            currentSubscribedTopics.add(topicName) // Keep track for potential future unsubscribes
+            try {
+                FirebaseMessaging.getInstance().subscribeToTopic(topicName).await()
+                Log.d("GroupMonitorService", "Subscribed to group topic: $topicName for user $userId.")
+            } catch (e: Exception) {
+                Log.e("GroupMonitorService", "Failed to subscribe to group topic $topicName: ${e.message}", e)
+            }
+        }
+
+        // IMPROVEMENT: To truly handle unsubscribes for groups no longer joined,
+        // you would need to:
+        // 1. Maintain a persistent local record (e.g., in Room) of all topics the user is subscribed to.
+        // 2. Compare this local list with `currentActiveMemberships`.
+        // 3. Unsubscribe from any topics in the local list that are *not* in `currentActiveMemberships`.
+        // This is a more advanced feature for a later iteration if needed for resource optimization.
+        Log.d("GroupMonitorService", "Finished managing group topic subscriptions for user $userId. Currently active topics: $currentSubscribedTopics")
     }
 
 
@@ -560,9 +621,8 @@ class GroupMonitorService(
      * Listens for details of the currently active group.
      */
     private fun listenForActiveGroupDetails(groupId: String) {
-        // Only remove and re-attach if the groupId actually changes or listener is null
-        if (activeGroupDetailsListener == null || (activeGroup.value?.groupID != groupId)) { // Use activeGroup.value.groupID for comparison
-            activeGroupDetailsListener?.remove() // Remove old listener if exists for a different group
+        if (activeGroupDetailsListener == null || (activeGroup.value?.groupID != groupId)) {
+            activeGroupDetailsListener?.remove()
             Log.d("GroupMonitorService", "listenForActiveGroupDetails: Attaching listener for group $groupId.")
             activeGroupDetailsListener = db.collection("groups").document(groupId)
                 .addSnapshotListener { snapshot, e ->
@@ -575,7 +635,6 @@ class GroupMonitorService(
                             _groupDetailsStatus.value = GroupDetailsStatus.ERROR
                             Log.d("GroupMonitorService", "Group details status changed: $oldStatus -> ERROR")
                         }
-                        // Explicitly clear selected active group in user profile if there's a group details error
                         val currentUserId = auth.currentUser?.uid
                         if (currentUserId != null) {
                             monitorScope.launch {
@@ -601,7 +660,6 @@ class GroupMonitorService(
                                 Log.d("GroupMonitorService", "Group details status changed: $oldStatus -> $newStatus")
                                 if (newStatus == GroupDetailsStatus.EXPIRED) {
                                     _userMessage.value = "Group '${group.groupName}' has expired. You have been automatically removed."
-                                    // Also clear active group in user profile if it expires
                                     val currentUserId = auth.currentUser?.uid
                                     if (currentUserId != null) {
                                         monitorScope.launch {
@@ -618,7 +676,6 @@ class GroupMonitorService(
                                 _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
                                 Log.d("GroupMonitorService", "Group details status changed: $oldStatus -> NOT_FOUND")
                             }
-                            // Also clear active group in user profile if the group data is malformed
                             val currentUserId = auth.currentUser?.uid
                             if (currentUserId != null) {
                                 monitorScope.launch {
@@ -634,7 +691,6 @@ class GroupMonitorService(
                             _groupDetailsStatus.value = GroupDetailsStatus.NOT_FOUND
                             Log.d("GroupMonitorService", "Group details status changed: $oldStatus -> NOT_FOUND")
                         }
-                        // Also clear active group in user profile if the group is deleted
                         val currentUserId = auth.currentUser?.uid
                         if (currentUserId != null) {
                             monitorScope.launch {
@@ -649,11 +705,10 @@ class GroupMonitorService(
     }
 
     /**
-     * NEW: Listens for the current user's location from the `current_user_locations` collection.
-     * This provides a dedicated stream for the authenticated user's own location.
+     * Listens for the current user's location from the `current_user_locations` collection.
      */
     private fun listenForCurrentUserLocation(userId: String) {
-        currentUserLocationListener?.remove() // Remove any old listener
+        currentUserLocationListener?.remove()
 
         Log.d("GroupMonitorService", "listenForCurrentUserLocation: Attaching listener for current user's location: $userId.")
 
@@ -679,31 +734,30 @@ class GroupMonitorService(
 
 
     /**
-     * NEW: Listens for the current location of users who are actively tracking for the specified group.
-     * This uses the scalable `whereEqualTo("activeTrackingGroupId", groupId)` query.
+     * Listens for the current location of users who are actively tracking for the specified group.
      */
     private fun listenForActiveGroupUsersLocations(groupId: String, currentUserId: String) {
-        activeGroupUsersLocationsListener?.remove() // Remove any old listener
+        activeGroupUsersLocationsListener?.remove()
 
         Log.d("GroupMonitorService", "listenForActiveGroupUsersLocations: Attaching listener for active group users in group: $groupId.")
 
         if (groupId.isEmpty()) {
             _otherMembersLocations.value = emptyList()
             _otherMembersProfiles.value = emptyMap()
-            stopOtherMembersProfilesListeners() // Clear associated profiles
+            stopOtherMembersProfilesListeners()
             Log.d("GroupMonitorService", "listenForActiveGroupUsersLocations: Group ID is empty, skipping listener attachment.")
             return
         }
 
         activeGroupUsersLocationsListener = db.collection("current_user_locations")
-            .whereEqualTo("activeTrackingGroupId", groupId) // Scalable query!
+            .whereEqualTo("activeTrackingGroupId", groupId)
             .addSnapshotListener { snapshots, e ->
                 Log.d("GroupMonitorService", "listenForActiveGroupUsersLocations: Snapshot received for group $groupId. Error: ${e?.message}, Snapshots: ${snapshots?.size()}")
                 if (e != null) {
                     Log.w("GroupMonitorService", "Listen for active group users' locations failed.", e)
                     _otherMembersLocations.value = emptyList()
                     _otherMembersProfiles.value = emptyMap()
-                    stopOtherMembersProfilesListeners() // Ensure profile listeners are stopped on error
+                    stopOtherMembersProfilesListeners()
                     return@addSnapshotListener
                 }
 
@@ -711,14 +765,12 @@ class GroupMonitorService(
                     val activeLocations = snapshots.documents.mapNotNull { doc ->
                         doc.toObject(Locations::class.java)
                     }.filter {
-                        // Filter out current user's location, as it's now provided by _currentUserLocation
                         it.userId != currentUserId
                     }
                     _otherMembersLocations.value = activeLocations
                     Log.d("GroupMonitorService", "Updated ${activeLocations.size} other active group members' locations from current_user_locations.")
 
                     val newProfileUserIds = activeLocations.map { it.userId }.distinct()
-                    // Re-attach profile listeners only for users whose locations are currently being displayed.
                     listenForOtherMembersProfiles(newProfileUserIds)
                 } else {
                     _otherMembersLocations.value = emptyList()
@@ -731,19 +783,16 @@ class GroupMonitorService(
 
     /**
      * Listens for profile updates of specified other members.
-     * This function is now called by `listenForActiveGroupUsersLocations` to ensure
-     * we only fetch profiles for users whose locations are actively being tracked for the current group.
      */
     private fun listenForOtherMembersProfiles(userIds: List<String>) {
-        // Only update listeners if the set of user IDs has actually changed.
         val newUserIdsSet = userIds.distinct().toSet()
         if (newUserIdsSet == activelyMonitoredProfileUserIds) {
             Log.d("GroupMonitorService", "listenForOtherMembersProfiles: Monitored profile user IDs are unchanged. Skipping listener re-attachment.")
-            return // No change, do nothing
+            return
         }
 
-        stopOtherMembersProfilesListeners() // Stop previous listeners before setting up new ones
-        activelyMonitoredProfileUserIds = newUserIdsSet // Update the set of actively monitored IDs
+        stopOtherMembersProfilesListeners()
+        activelyMonitoredProfileUserIds = newUserIdsSet
 
         Log.d("GroupMonitorService", "listenForOtherMembersProfiles: Attaching listeners for ${userIds.size} user profiles.")
 

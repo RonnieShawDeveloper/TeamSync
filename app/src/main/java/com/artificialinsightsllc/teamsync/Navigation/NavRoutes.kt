@@ -15,5 +15,6 @@ object NavRoutes {
     const val USER_SETTINGS = "user_settings"
     const val SHUTDOWN = "shutdown"
     const val GEOFENCE = "geofence"
-    const val CREATE_GEOFENCE = "create_geofence" // NEW: Add this route
+    const val CREATE_GEOFENCE = "create_geofence"
+    const val NOTIFICATIONS = "notifications" // NEW: Add this route for the Notifications screen
 }

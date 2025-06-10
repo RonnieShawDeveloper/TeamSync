@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import com.artificialinsightsllc.teamsync.Database.AppDatabase // NEW: Import AppDatabase
+import com.artificialinsightsllc.teamsync.Database.NotificationRepository // NEW: Import NotificationRepository
+
 
 // Implement Application.ActivityLifecycleCallbacks to track app foreground/background state
 class TeamSyncApplication : Application(), Application.ActivityLifecycleCallbacks {
@@ -24,6 +27,10 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
         private set
 
     lateinit var markerMonitorService: MarkerMonitorService
+        private set
+
+    // NEW: Declare NotificationRepository
+    lateinit var notificationRepository: NotificationRepository
         private set
 
     // State to track if the app is currently in the foreground
@@ -65,6 +72,10 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
         markerMonitorService = MarkerMonitorService()
         groupMonitorService = GroupMonitorService(applicationContext, markerMonitorService = markerMonitorService)
 
+        // NEW: Initialize NotificationRepository
+        val database = AppDatabase.getDatabase(applicationContext)
+        notificationRepository = NotificationRepository(database.notificationDao())
+
         // NEW: Call startMonitoring here, in the Application's onCreate.
         // This ensures the GroupMonitorService's AuthStateListener is attached very early
         // in the app's lifecycle, allowing it to reliably pick up Firebase Auth changes.
@@ -79,6 +90,7 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
         unregisterActivityLifecycleCallbacks(this)
         groupMonitorService.shutdown()
         markerMonitorService.shutdown()
+        // No explicit shutdown needed for Room, it manages its own lifecycle.
     }
 
     // --- Activity Lifecycle Callback Implementations ---

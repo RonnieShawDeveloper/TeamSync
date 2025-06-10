@@ -544,10 +544,10 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { if (isInActiveGroup) { viewModel.showToastEvent("Send FCM Notification clicked!") } else { viewModel.showToastEvent("Must be in a Group to Send Alerts!") } },
-                        label = "SEND ALERTS",
-                        icon = { Icon(Icons.Filled.Notifications, "Send FCM Notification") },
-                        enabled = isInActiveGroup,
+                        onClick = { viewModel.navigateToNotifications() }, // Corrected onClick
+                        label = "NOTIFICATIONS", // Corrected label
+                        icon = { Icon(Icons.Filled.Notifications, "Notifications") }, // Corrected icon
+                        enabled = true, // Always enabled
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,

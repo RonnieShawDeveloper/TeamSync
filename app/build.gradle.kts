@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    id("kotlin-kapt") // NEW: Apply the Kotlin KAPT plugin
 }
 
 android {
@@ -59,7 +60,7 @@ dependencies {
 
     // Compose UI Additions
     // Material Icons Extended for additional icons (e.g., Visibility, VisibilityOff)
-    implementation("androidx.compose.material:material-icons-extended:1.6.7") // Added version
+    implementation("androidx.compose.material:material-icons-extended:1.6.7")
 
     // Navigation Compose
     implementation("androidx.navigation:navigation-compose:2.9.0")
@@ -91,22 +92,29 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore-ktx")
     // Firebase Storage
     implementation("com.google.firebase:firebase-storage-ktx")
-
-    // NEW: Firebase Remote Config
+    // Firebase Remote Config
     implementation("com.google.firebase:firebase-config-ktx")
+    // Firebase Cloud Messaging
+    implementation("com.google.firebase:firebase-messaging-ktx")
+
+    // Room Database
+    implementation("androidx.room:room-runtime:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1") // CHANGED from annotationProcessor to kapt
+    implementation("androidx.room:room-ktx:2.6.1") // For Coroutines support with Room
+
 
     // Required permissions
     implementation("androidx.activity:activity-ktx:1.8.2")
 
     // Google Maps Compose Utilities
-    implementation("com.google.maps.android:maps-compose:4.3.0") // Or the latest stable version
-    implementation("com.google.android.gms:play-services-maps:19.2.0") // Or the latest stable version
+    implementation("com.google.maps.android:maps-compose:4.3.0")
+    implementation("com.google.android.gms:play-services-maps:19.2.0")
 
     // Google Maps AndroidUtils (for Polylines, Markers, etc.)
-    implementation("com.google.maps.android:maps-utils-ktx:3.4.0") // <-- ADD THIS LINE
+    implementation("com.google.maps.android:maps-utils-ktx:3.4.0")
 
     // Google Location Services (FusedLocationProviderClient)
-    implementation("com.google.android.gms:play-services-location:21.3.0") // Or the latest stable version
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     // For logging (if not already present)
     implementation("androidx.compose.ui:ui-tooling-preview")

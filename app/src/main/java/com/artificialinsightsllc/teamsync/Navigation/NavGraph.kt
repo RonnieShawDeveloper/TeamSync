@@ -1,13 +1,17 @@
 // In file: app/src/main/java/com/artificialinsightsllc/teamsync/Navigation/NavGraph.kt
 package com.artificialinsightsllc.teamsync.Navigation
 
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.NavType
-import androidx.navigation.navArgument // Import navArgument for type safety
+import androidx.navigation.navArgument
+import androidx.navigation.compose.dialog // NEW: Import for dialog composable, if needed for future deep link modals. Not used directly for NotificationScreen but good to have.
+import androidx.navigation.navDeepLink // NEW: Import navDeepLink
 import com.artificialinsightsllc.teamsync.Screens.GroupCreationScreen
 import com.artificialinsightsllc.teamsync.Screens.GroupsListScreen
 import com.artificialinsightsllc.teamsync.Screens.LoginScreen
@@ -20,10 +24,13 @@ import com.artificialinsightsllc.teamsync.Screens.PreCheckScreen
 import com.artificialinsightsllc.teamsync.Screens.Signup.SignupScreen
 import com.artificialinsightsllc.teamsync.Screens.TravelReportScreen
 import com.artificialinsightsllc.teamsync.Screens.UserSettingsScreen
-import com.artificialinsightsllc.teamsync.Screens.ShutdownScreen // NEW IMPORT for ShutdownScreen
-import com.artificialinsightsllc.teamsync.Screens.CreateGeofenceScreen // NEW IMPORT
+import com.artificialinsightsllc.teamsync.Screens.ShutdownScreen
+import com.artificialinsightsllc.teamsync.Screens.CreateGeofenceScreen
+import com.artificialinsightsllc.teamsync.Screens.NotificationScreen
+import com.artificialinsightsllc.teamsync.Services.TeamSyncFirebaseMessagingService // NEW: Import for constants
 
 
+@RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
 @Composable
 fun AppNavGraph(navController: NavHostController) {
     NavHost(navController = navController, startDestination = NavRoutes.SPLASH) {
@@ -60,17 +67,39 @@ fun AppNavGraph(navController: NavHostController) {
         composable(NavRoutes.GEOFENCE) {
             GeofenceScreen(navController).Content()
         }
-        composable(NavRoutes.CREATE_GEOFENCE) { // NEW: Add this composable
+        composable(NavRoutes.CREATE_GEOFENCE) {
             CreateGeofenceScreen(navController).Content()
         }
-        composable(NavRoutes.SHUTDOWN) { // NEW: Shutdown Screen
+        composable(NavRoutes.SHUTDOWN) {
             ShutdownScreen(navController).Content()
+        }
+        // NEW/UPDATED: Add deepLinks to the Notifications composable
+        composable(
+            route = NavRoutes.NOTIFICATIONS + "?${TeamSyncFirebaseMessagingService.NOTIFICATION_ID_PARAM}={${TeamSyncFirebaseMessagingService.NOTIFICATION_ID_PARAM}}",
+            arguments = listOf(
+                navArgument(TeamSyncFirebaseMessagingService.NOTIFICATION_ID_PARAM) {
+                    type = NavType.IntType
+                    defaultValue = -1 // Default value if ID is not provided
+                }
+            ),
+            deepLinks = listOf(
+                navDeepLink {
+                    uriPattern = "${TeamSyncFirebaseMessagingService.DEEPLINK_SCHEME}://${TeamSyncFirebaseMessagingService.DEEPLINK_HOST}/${TeamSyncFirebaseMessagingService.DEEPLINK_PATH_DETAIL}?${TeamSyncFirebaseMessagingService.NOTIFICATION_ID_PARAM}={${TeamSyncFirebaseMessagingService.NOTIFICATION_ID_PARAM}}"
+                },
+                navDeepLink {
+                    uriPattern = "${TeamSyncFirebaseMessagingService.DEEPLINK_SCHEME}://${TeamSyncFirebaseMessagingService.DEEPLINK_HOST}/${TeamSyncFirebaseMessagingService.DEEPLINK_PATH_LIST}"
+                }
+            )
+        ) { backStackEntry ->
+            val notificationId = backStackEntry.arguments?.getInt(TeamSyncFirebaseMessagingService.NOTIFICATION_ID_PARAM)
+            // You can pass this notificationId to NotificationScreen.Content() if it needs to focus on a specific notification
+            NotificationScreen(navController).Content() // Content will be updated to handle the ID if needed
         }
         composable(
             route = NavRoutes.TRAVEL_REPORT,
             arguments = listOf(
                 navArgument("userId") { type = NavType.StringType },
-                navArgument("timeRangeMillis") { type = NavType.LongType } // UPDATED: Added timeRangeMillis argument
+                navArgument("timeRangeMillis") { type = NavType.LongType }
             )
         ) { backStackEntry ->
             val userId = backStackEntry.arguments?.getString("userId")

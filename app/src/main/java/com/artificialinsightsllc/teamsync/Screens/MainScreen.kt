@@ -1,19 +1,8 @@
 // In file: app/src/main/java/com/artificialinsightsllc/teamsync/Screens/MainScreen.kt
 package com.artificialinsightsllc.teamsync.Screens
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.location.Geocoder
-import android.location.Location
-import android.os.Build
-import android.os.Looper
-import android.util.Log
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -28,16 +17,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Polyline
 import androidx.compose.material.icons.filled.Notifications
@@ -46,8 +31,8 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Close // Import Close icon
-import androidx.compose.material.icons.filled.ExitToApp // Icon for Logout/Shutdown
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FloatingActionButton
@@ -59,7 +44,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -72,17 +56,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavHostController
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices.getFusedLocationProviderClient
-import com.google.android.gms.location.Priority
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
@@ -94,337 +68,114 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import com.artificialinsightsllc.teamsync.Navigation.NavRoutes
 import com.artificialinsightsllc.teamsync.R
-import com.artificialinsightsllc.teamsync.Models.UserModel
-import com.artificialinsightsllc.teamsync.Models.Locations
-import com.artificialinsightsllc.teamsync.Models.MapMarker
-import com.artificialinsightsllc.teamsync.Models.MapMarkerType
 import com.artificialinsightsllc.teamsync.Helpers.MarkerIconHelper
-import com.artificialinsightsllc.teamsync.Helpers.TimeFormatter
-import com.artificialinsightsllc.teamsync.Helpers.UnitConverter
-import com.artificialinsightsllc.teamsync.Services.GroupMonitorService
-import com.artificialinsightsllc.teamsync.Services.FirestoreService
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
-import kotlinx.coroutines.tasks.await
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
 import com.artificialinsightsllc.teamsync.Screens.MarkerInfoDialog
-import com.artificialinsightsllc.teamsync.TeamSyncApplication
-import com.artificialinsightsllc.teamsync.Services.LocationTrackingService
-import java.io.IOException
-import java.util.Locale
-import java.util.concurrent.TimeUnit
-
-// NEW: Add BorderStroke import for the close button
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.CircleShape // Import CircleShape
-
-// NEW: Import DarkBlue and LightCream from your theme colors
+import androidx.compose.foundation.shape.CircleShape
 import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
 import com.artificialinsightsllc.teamsync.ui.theme.LightCream
-import androidx.compose.foundation.shape.RoundedCornerShape // For card shape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.ui.draw.shadow
-
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.artificialinsightsllc.teamsync.ViewModels.MainViewModel
 
 class MainScreen(private val navController: NavHostController) {
-
-    data class MarkerDisplayInfo(
-        val title: String,
-        val timestamp: Long,
-        val speed: Float?,
-        val bearing: Float?,
-        val profilePhotoUrl: String?,
-        val latLng: LatLng?,
-        val mapMarker: MapMarker? = null,
-        val userId: String? = null
-    )
 
     @OptIn(ExperimentalMaterial3Api::class)
     @SuppressLint("MissingPermission")
     @Composable
-    fun Content() {
+    fun Content(viewModel: MainViewModel = viewModel()) {
         val context = LocalContext.current
-        val lifecycleOwner = LocalLifecycleOwner.current
-        val toastMessage: (String) -> Unit = { message ->
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-        }
-
-        val teamSyncApplication = context.applicationContext as TeamSyncApplication
-        val groupMonitorService = teamSyncApplication.groupMonitorService
-        val markerMonitorService = teamSyncApplication.markerMonitorService
-        val firestoreService = remember { FirestoreService() }
         val coroutineScope = rememberCoroutineScope()
 
-        // UI state variables
-        var userLocation by remember { mutableStateOf<Location?>(null) }
-        var mapLockedToUserLocation by remember { mutableStateOf(true) }
-        var hasPerformedInitialCenter by remember { mutableStateOf(false) } // Indicates if map has centered on user's first GPS fix
+        // UI state variables - now collected from ViewModel
+        val currentUserId by viewModel.currentUserId.collectAsStateWithLifecycle()
+        val currentUserLocation by viewModel.currentUserLocation.collectAsStateWithLifecycle()
+        val currentUserModel by viewModel.currentUserModel.collectAsStateWithLifecycle()
+        val isInActiveGroup by viewModel.isInActiveGroup.collectAsStateWithLifecycle()
+        val activeGroup by viewModel.activeGroup.collectAsStateWithLifecycle()
+        val otherMembersLocations by viewModel.otherMembersLocations.collectAsStateWithLifecycle()
+        val otherMembersProfiles by viewModel.otherMembersProfiles.collectAsStateWithLifecycle()
+        val mapMarkers by viewModel.mapMarkers.collectAsStateWithLifecycle()
+        val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
 
-        var showPermissionRationaleDialog by remember { mutableStateOf(false) }
-        var allPermissionsGranted by remember { mutableStateOf(false) }
-        var hasNotificationPermission by remember { mutableStateOf(false) }
+        val mapLockedToUserLocation by viewModel.mapLockedToUserLocation.collectAsStateWithLifecycle()
+        val showInstructionsOverlay by viewModel.showInstructionsOverlay.collectAsStateWithLifecycle()
+        val countdownString by viewModel.countdownString.collectAsStateWithLifecycle()
 
-        var showExpiredGroupDialog by remember { mutableStateOf(false) }
-        var expiredGroupDialogMessage by remember { mutableStateOf<String?>(null) }
+        val showExpiredGroupDialog by viewModel.showExpiredGroupDialog.collectAsStateWithLifecycle()
+        val expiredGroupDialogMessage by viewModel.expiredGroupDialogMessage.collectAsStateWithLifecycle()
 
+        val showCustomMarkerInfoDialog by viewModel.showCustomMarkerInfoDialog.collectAsStateWithLifecycle()
+        val currentMarkerInfo by viewModel.currentMarkerInfo.collectAsStateWithLifecycle()
+
+        val showMapLoadingDialog by viewModel.showMapLoadingDialog.collectAsStateWithLifecycle()
+
+        // Local UI state (not persistent across recompositions/navigation, purely visual)
         val snackbarHostState = remember { SnackbarHostState() }
-        var showCustomMarkerInfoDialog by remember { mutableStateOf(false) }
-        var currentMarkerInfo by remember { mutableStateOf<MarkerDisplayInfo?>(null) }
-
-        var showMapLoadingDialog by remember { mutableStateOf(true) }
-
-        // State for the countdown timer
-        var countdownString by remember { mutableStateOf("") }
 
 
         val cameraPositionState = rememberCameraPositionState {
             position = LatLng(39.8283, -98.5795).let { CameraPosition.fromLatLngZoom(it, 3f) }
         }
-        val fusedLocationClient: FusedLocationProviderClient = remember {
-            getFusedLocationProviderClient(context)
-        }
 
-        val isInGroup by groupMonitorService.isInActiveGroup.collectAsStateWithLifecycle()
-        val activeGroup by groupMonitorService.activeGroup.collectAsStateWithLifecycle()
-        val userMessage by groupMonitorService.userMessage.collectAsStateWithLifecycle()
-        val effectiveLocationUpdateInterval by groupMonitorService.effectiveLocationUpdateInterval.collectAsStateWithLifecycle()
-
-        val otherMembersLocations by groupMonitorService.otherMembersLocations.collectAsStateWithLifecycle()
-        val otherMembersProfiles by groupMonitorService.otherMembersProfiles.collectAsStateWithLifecycle()
-        val mapMarkers by markerMonitorService.mapMarkers.collectAsStateWithLifecycle()
-        Log.d("MainScreen", "Collected ${mapMarkers.size} map markers.")
-
-
-        val allPermissionsNeeded = remember {
-            mutableListOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.CAMERA,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    Manifest.permission.READ_MEDIA_IMAGES
-                } else {
-                    Manifest.permission.READ_EXTERNAL_STORAGE
+        // Effect for showing Snackbar messages from ViewModel
+        LaunchedEffect(userMessage) {
+            userMessage?.let { message ->
+                if (!message.contains("has expired. You have been automatically removed.")) {
+                    snackbarHostState.showSnackbar(message)
                 }
-            ).apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    add(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }.filterNotNull().toTypedArray()
-        }
-
-
-        fun startAppTrackingService() {
-            val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
-                action = LocationTrackingService.ACTION_START_SERVICE
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                try {
-                    context.startForegroundService(serviceIntent)
-                    Log.d("MainScreen", "Attempted to start foreground service via startForegroundService.")
-                } catch (e: Exception) {
-                    Log.e("MainScreen", "Failed to start foreground service: ${e.message}")
-                    Toast.makeText(context, "Cannot start background location service. Please open the app or grant necessary permissions.", Toast.LENGTH_LONG).show()
-                }
-            } else {
-                context.startService(serviceIntent)
-                Log.d("MainScreen", "Attempted to start service via startService (pre-Oreo).")
+                viewModel.clearUserMessage()
             }
         }
 
-        fun stopAppTrackingService() {
-            val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
-                action = LocationTrackingService.ACTION_STOP_SERVICE
+        // Effect for observing Toast events from ViewModel
+        LaunchedEffect(viewModel.toastEvent) {
+            viewModel.toastEvent.collect { message ->
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
-            context.stopService(serviceIntent)
-            Log.d("MainScreen", "Requested stop of LocationTrackingService.")
         }
 
-        val locationCallback = remember {
-            object : LocationCallback() {
-                override fun onLocationResult(locationResult: LocationResult) {
-                    locationResult.lastLocation?.let { location ->
-                        userLocation = location
-                        Log.d("MainScreen", "Local GPS Location received: ${location.latitude}, ${location.longitude}")
-                        Log.d("MainScreen", "MainScreen local location received, but not sending to Firestore. LocationTrackingService is responsible for persistence.")
-                    }
+        // Effect for observing navigation events from ViewModel
+        LaunchedEffect(viewModel.navigationEvent) {
+            viewModel.navigationEvent.collect { route ->
+                navController.navigate(route)
+            }
+        }
+
+        // Effect for initial map centering
+        LaunchedEffect(currentUserLocation, showMapLoadingDialog) {
+            currentUserLocation?.let { loc ->
+                if (mapLockedToUserLocation || showMapLoadingDialog) {
+                    cameraPositionState.animate(
+                        CameraUpdateFactory.newLatLngZoom(LatLng(loc.latitude, loc.longitude), 15f)
+                    )
+                    // Log.d("MainScreen", "Camera moved to: ${loc.latitude}, ${loc.longitude}") // Removed for brevity
                 }
             }
         }
 
-        val multiplePermissionsLauncher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.RequestMultiplePermissions()
-        ) { permissions ->
-            allPermissionsGranted = permissions.all { it.value }
-            hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                permissions[Manifest.permission.POST_NOTIFICATIONS] ?: false
-            } else {
-                true
-            }
-
-            if (allPermissionsGranted && hasNotificationPermission) {
-                Log.d("MainScreen", "All required permissions granted via launcher. Attempting to start Foreground Service.")
-                startAppTrackingService()
-            } else {
-                Log.w("MainScreen", "Not all required permissions granted via launcher. Foreground Service will not start or will stop.")
-                stopAppTrackingService()
-            }
-            groupMonitorService.setUiPermissionsGranted(allPermissionsGranted && hasNotificationPermission)
-        }
-
-
-        var currentUserModel by remember { mutableStateOf<UserModel?>(null) }
-
-        var showInstructionsOverlay by remember { mutableStateOf(false) }
-
-        LaunchedEffect(Unit) {
-            val auth = FirebaseAuth.getInstance()
-            val firestore = FirebaseFirestore.getInstance()
-            val userId = auth.currentUser?.uid
-
-            if (userId != null) {
-                try {
-                    val userDocRef = firestore.collection("users").document(userId)
-                    val userSnapshot = userDocRef.get().await()
-
-                    if (userSnapshot.exists()) {
-                        currentUserModel = userSnapshot.toObject(UserModel::class.java)
-                        Log.d("MainScreen", "User profile loaded: ${currentUserModel?.displayName}")
-
-                        if (currentUserModel?.mainInstructionsSeen != true) {
-                            showInstructionsOverlay = true
-                        }
-
-                    } else {
-                        Log.w("MainScreen", "User document not found for ID: $userId")
-                    }
-                } catch (e: Exception) {
-                    Log.e("MainScreen", "Error loading user profile: ${e.message}")
-                }
-            } else {
-                Log.d("MainScreen", "No authenticated user found. Consider navigating to LoginScreen.")
-            }
-
-            val currentAllPermissionsGranted = allPermissionsNeeded.all {
-                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-            }
-            val currentHasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            } else {
-                true
-            }
-
-            allPermissionsGranted = currentAllPermissionsGranted
-            hasNotificationPermission = currentHasNotificationPermission
-
-            if (!(currentAllPermissionsGranted && currentHasNotificationPermission)) {
-                showPermissionRationaleDialog = true
-            } else {
-                Log.d("MainScreen", "All permissions initially granted on app launch. Attempting to start Foreground Service immediately.")
-                startAppTrackingService()
-            }
-            groupMonitorService.setUiPermissionsGranted(allPermissionsGranted && hasNotificationPermission)
-        }
-
-        // Countdown Timer Logic
-        LaunchedEffect(activeGroup) {
-            val endTime = activeGroup?.groupEndTimestamp
-            if (endTime != null) {
-                while (true) {
-                    val remaining = endTime - System.currentTimeMillis()
-                    if (remaining > 0) {
-                        val days = TimeUnit.MILLISECONDS.toDays(remaining)
-                        val hours = TimeUnit.MILLISECONDS.toHours(remaining) % 24
-                        val minutes = TimeUnit.MILLISECONDS.toMinutes(remaining) % 60
-                        val seconds = TimeUnit.MILLISECONDS.toSeconds(remaining) % 60
-                        countdownString = String.format("%02d:%02d:%02d:%02d", days, hours, minutes, seconds)
-                    } else {
-                        countdownString = "00:00:00:00"
-                        break
-                    }
-                    delay(1000L)
-                }
-            } else {
-                countdownString = ""
-            }
-        }
-
-
-        DisposableEffect(lifecycleOwner, fusedLocationClient, allPermissionsGranted, effectiveLocationUpdateInterval) {
-            val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_START) {
-                    val fineLocationGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                    val coarseLocationGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                    val allLocationPermissionsGrantedForUI = (fineLocationGranted || coarseLocationGranted)
-
-                    if (allLocationPermissionsGrantedForUI) {
-                        startLocationUpdates(fusedLocationClient, locationCallback, effectiveLocationUpdateInterval)
-                    } else {
-                        Log.w("MainScreen", "Not all required location permissions are granted on ON_START. Local GPS updates for map dot will not start.")
-                        Toast.makeText(context, "Location permission missing. Map features may be limited.", Toast.LENGTH_LONG).show()
-                    }
-                } else if (event == Lifecycle.Event.ON_STOP) {
-                    stopLocationUpdates(fusedLocationClient, locationCallback)
-                }
-            }
-            lifecycleOwner.lifecycle.addObserver(observer)
-            onDispose {
-                lifecycleOwner.lifecycle.removeObserver(observer)
-                fusedLocationClient.removeLocationUpdates(locationCallback)
-                Log.d("MainScreen", "Stopped local GPS location updates on dispose.")
-            }
-        }
-
-        LaunchedEffect(hasPerformedInitialCenter) {
-            if (hasPerformedInitialCenter) {
-                showMapLoadingDialog = false
-            }
-        }
-
-        LaunchedEffect(isInGroup, allPermissionsGranted, hasNotificationPermission) {
-            if (!(allPermissionsGranted && hasNotificationPermission) && !showPermissionRationaleDialog) {
-                Log.d("MainScreen", "Permissions changed or missing, triggering rationale check.")
-                showPermissionRationaleDialog = true
-            } else if (showPermissionRationaleDialog && (allPermissionsGranted && hasNotificationPermission)) {
-                showPermissionRationaleDialog = false
-            }
-        }
-
-        LaunchedEffect(userLocation, mapLockedToUserLocation) {
-            userLocation?.let { loc ->
-                val newLatLng = LatLng(loc.latitude, loc.longitude)
-
-                if (mapLockedToUserLocation || !hasPerformedInitialCenter) {
+        // Effect for map lock state changes
+        LaunchedEffect(mapLockedToUserLocation, currentUserLocation) {
+            if (mapLockedToUserLocation) {
+                currentUserLocation?.let { loc ->
+                    val newLatLng = LatLng(loc.latitude, loc.longitude)
                     cameraPositionState.animate(
                         CameraUpdateFactory.newLatLngZoom(newLatLng, 15f)
                     )
-                    Log.d("MainScreen", "Camera moved to: ${loc.latitude}, ${loc.longitude}")
-                    if (!hasPerformedInitialCenter) {
-                        hasPerformedInitialCenter = true
-                    }
                 }
-            }
-        }
-
-        LaunchedEffect(userMessage) {
-            userMessage?.let { message ->
-                if (message.contains("has expired. You have been automatically removed.")) {
-                    expiredGroupDialogMessage = message
-                    showExpiredGroupDialog = true
-                } else {
-                    snackbarHostState.showSnackbar(message)
-                }
-                groupMonitorService.clearUserMessage()
             }
         }
 
@@ -446,25 +197,20 @@ class MainScreen(private val navController: NavHostController) {
                 GoogleMap(
                     modifier = Modifier.fillMaxSize(),
                     cameraPositionState = cameraPositionState,
-                    properties = MapProperties(
-                        isMyLocationEnabled = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED,
-                        isBuildingEnabled = true
-                    ),
+                    properties = MapProperties(isMyLocationEnabled = false, isBuildingEnabled = true),
                     uiSettings = MapUiSettings(zoomControlsEnabled = false)
                 ) {
-                    val isCurrentUserLocationStale = userLocation?.let {
-                        System.currentTimeMillis() - it.time >= 300000L
-                    } ?: false
-
-                    userLocation?.let { loc ->
+                    currentUserLocation?.let { loc ->
                         val userLatLng = LatLng(loc.latitude, loc.longitude)
                         val markerState = rememberMarkerState()
 
-                        LaunchedEffect(userLocation) {
+                        LaunchedEffect(currentUserLocation) {
                             markerState.position = userLatLng
                         }
 
                         val userProfilePicUrl = currentUserModel?.profilePhotoUrl
+                        val isCurrentUserLocationStale = System.currentTimeMillis() - loc.timestamp >= 300000L
+
                         val userMarkerIcon = MarkerIconHelper.rememberUserMarkerIcon(
                             profileImageUrl = userProfilePicUrl,
                             defaultProfileResId = R.drawable.default_profile_pic,
@@ -472,49 +218,52 @@ class MainScreen(private val navController: NavHostController) {
                             isLocationStale = isCurrentUserLocationStale
                         )
 
-                        if (userMarkerIcon != null) {
-                            Marker(
-                                state = markerState,
-                                title = currentUserModel?.displayName ?: "My Location",
-                                icon = userMarkerIcon,
-                                anchor = Offset(0.5f, 1.0f),
-                                onClick = {
-                                    currentMarkerInfo = MarkerDisplayInfo(
-                                        title = it.title ?: "Unknown User",
-                                        timestamp = loc.time,
-                                        speed = if (loc.hasSpeed()) loc.speed else null,
-                                        bearing = if (loc.hasBearing()) loc.bearing else null,
-                                        profilePhotoUrl = userProfilePicUrl,
-                                        latLng = userLatLng,
-                                        userId = FirebaseAuth.getInstance().currentUser?.uid
-                                    )
-                                    showCustomMarkerInfoDialog = true
-                                    true
-                                }
-                            )
-                        } else {
-                            Marker(
-                                state = markerState,
-                                title = currentUserModel?.displayName ?: "My Location",
-                                onClick = {
-                                    currentMarkerInfo = MarkerDisplayInfo(
-                                        title = it.title ?: "Unknown User",
-                                        timestamp = loc.time,
-                                        speed = if (loc.hasSpeed()) loc.speed else null,
-                                        bearing = if (loc.hasBearing()) loc.bearing else null,
-                                        profilePhotoUrl = userProfilePicUrl,
-                                        latLng = userLatLng,
-                                        userId = FirebaseAuth.getInstance().currentUser?.uid
-                                    )
-                                    showCustomMarkerInfoDialog = true
-                                    true
-                                }
-                            )
+                        if (currentUserModel?.showMyOwnMarker == true) {
+                            if (userMarkerIcon != null) {
+                                Marker(
+                                    state = markerState,
+                                    title = currentUserModel?.displayName ?: "My Location",
+                                    icon = userMarkerIcon,
+                                    anchor = Offset(0.5f, 1.0f),
+                                    onClick = {
+                                        viewModel.showMarkerInfoDialog(
+                                            MainViewModel.MarkerDisplayInfo(
+                                                title = it.title ?: "Unknown User",
+                                                timestamp = loc.timestamp,
+                                                speed = loc.speed,
+                                                bearing = loc.bearing,
+                                                profilePhotoUrl = userProfilePicUrl,
+                                                latLng = userLatLng,
+                                                userId = currentUserId
+                                            )
+                                        )
+                                        true
+                                    }
+                                )
+                            } else {
+                                Marker(
+                                    state = markerState,
+                                    title = currentUserModel?.displayName ?: "My Location",
+                                    onClick = {
+                                        viewModel.showMarkerInfoDialog(
+                                            MainViewModel.MarkerDisplayInfo(
+                                                title = it.title ?: "Unknown User",
+                                                timestamp = loc.timestamp,
+                                                speed = loc.speed,
+                                                bearing = loc.bearing,
+                                                profilePhotoUrl = userProfilePicUrl,
+                                                latLng = userLatLng,
+                                                userId = currentUserId
+                                            )
+                                        )
+                                        true
+                                    }
+                                )
+                            }
                         }
                     }
 
-                    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
-                    if (isInGroup && currentUserId != null) {
+                    if (isInActiveGroup && currentUserId != null) {
                         otherMembersLocations.forEach { otherLoc ->
                             if (otherLoc.userId != currentUserId) {
                                 val otherMemberProfile = otherMembersProfiles[otherLoc.userId]
@@ -543,16 +292,17 @@ class MainScreen(private val navController: NavHostController) {
                                             icon = otherMarkerIcon,
                                             anchor = Offset(0.5f, 1.0f),
                                             onClick = {
-                                                currentMarkerInfo = MarkerDisplayInfo(
-                                                    title = it.title ?: "Unknown Member",
-                                                    timestamp = otherLoc.timestamp,
-                                                    speed = otherLoc.speed,
-                                                    bearing = otherLoc.bearing,
-                                                    profilePhotoUrl = otherProfilePicUrl,
-                                                    latLng = otherMemberLatLng,
-                                                    userId = otherLoc.userId
+                                                viewModel.showMarkerInfoDialog(
+                                                    MainViewModel.MarkerDisplayInfo(
+                                                        title = it.title ?: "Unknown Member",
+                                                        timestamp = otherLoc.timestamp,
+                                                        speed = otherLoc.speed,
+                                                        bearing = otherLoc.bearing,
+                                                        profilePhotoUrl = otherProfilePicUrl,
+                                                        latLng = otherMemberLatLng,
+                                                        userId = otherLoc.userId
+                                                    )
                                                 )
-                                                showCustomMarkerInfoDialog = true
                                                 true
                                             }
                                         )
@@ -561,16 +311,17 @@ class MainScreen(private val navController: NavHostController) {
                                             state = otherMarkerState,
                                             title = otherMemberProfile.displayName ?: "Unknown Member",
                                             onClick = {
-                                                currentMarkerInfo = MarkerDisplayInfo(
-                                                    title = it.title ?: "Unknown Member",
-                                                    timestamp = otherLoc.timestamp,
-                                                    speed = otherLoc.speed,
-                                                    bearing = otherLoc.bearing,
-                                                    profilePhotoUrl = otherProfilePicUrl,
-                                                    latLng = otherMemberLatLng,
-                                                    userId = otherLoc.userId
+                                                viewModel.showMarkerInfoDialog(
+                                                    MainViewModel.MarkerDisplayInfo(
+                                                        title = it.title ?: "Unknown Member",
+                                                        timestamp = otherLoc.timestamp,
+                                                        speed = otherLoc.speed,
+                                                        bearing = otherLoc.bearing,
+                                                        profilePhotoUrl = otherProfilePicUrl,
+                                                        latLng = otherMemberLatLng,
+                                                        userId = otherLoc.userId
+                                                    )
                                                 )
-                                                showCustomMarkerInfoDialog = true
                                                 true
                                             }
                                         )
@@ -599,17 +350,18 @@ class MainScreen(private val navController: NavHostController) {
                                     icon = mapMarkerIcon,
                                     anchor = Offset(0.5f, 0.5f),
                                     onClick = {
-                                        currentMarkerInfo = MarkerDisplayInfo(
-                                            title = mapMarker.message,
-                                            timestamp = mapMarker.timestamp,
-                                            speed = null,
-                                            bearing = mapMarker.cameraBearing,
-                                            profilePhotoUrl = mapMarker.photoUrl,
-                                            latLng = markerLatLng,
-                                            mapMarker = mapMarker,
-                                            userId = null
+                                        viewModel.showMarkerInfoDialog(
+                                            MainViewModel.MarkerDisplayInfo(
+                                                title = mapMarker.message,
+                                                timestamp = mapMarker.timestamp,
+                                                speed = null,
+                                                bearing = mapMarker.cameraBearing,
+                                                profilePhotoUrl = mapMarker.photoUrl,
+                                                latLng = markerLatLng,
+                                                mapMarker = mapMarker,
+                                                userId = null
+                                            )
                                         )
-                                        showCustomMarkerInfoDialog = true
                                         true
                                     }
                                 )
@@ -618,6 +370,7 @@ class MainScreen(private val navController: NavHostController) {
                     }
                 }
 
+                // Top app bar / logo area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -683,10 +436,10 @@ class MainScreen(private val navController: NavHostController) {
                             bottom = 16.dp + innerPadding.calculateBottomPadding()
                         ),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally // CHANGED: Centered horizontally
                 ) {
                     LabeledFab(
-                        onClick = { navController.navigate(NavRoutes.SHUTDOWN) },
+                        onClick = { viewModel.navigateToShutdown() },
                         label = "SHUTDOWN",
                         icon = { Icon(Icons.Filled.ExitToApp, "Logout/Shutdown") },
                         enabled = true,
@@ -697,22 +450,7 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = {
-                            mapLockedToUserLocation = !mapLockedToUserLocation
-                            if (mapLockedToUserLocation) {
-                                userLocation?.let { loc ->
-                                    val newLatLng = LatLng(loc.latitude, loc.longitude)
-                                    coroutineScope.launch {
-                                        cameraPositionState.animate(
-                                            CameraUpdateFactory.newLatLngZoom(newLatLng, 15f)
-                                        )
-                                    }
-                                    toastMessage("Map Locked to User Location")
-                                }
-                            } else {
-                                toastMessage("Map Unlocked (can roam)")
-                            }
-                        },
+                        onClick = { viewModel.toggleMapLock() },
                         label = if (mapLockedToUserLocation) "UNLOCK MAP" else "LOCK MAP",
                         icon = { Icon(imageVector = if (mapLockedToUserLocation) Icons.Filled.LockOpen else Icons.Filled.Lock, contentDescription = "Toggle Map Lock") },
                         enabled = true,
@@ -723,7 +461,7 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { navController.navigate(NavRoutes.USER_SETTINGS) },
+                        onClick = { viewModel.navigateToUserSettings() },
                         label = "USER SETTINGS",
                         icon = { Icon(Icons.Filled.Settings, "Member Settings") },
                         enabled = true,
@@ -734,10 +472,10 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { if (isInGroup) { toastMessage("Chat Window clicked!") } },
+                        onClick = { if (isInActiveGroup) { viewModel.showToastEvent("Chat Window clicked!") } else { viewModel.showToastEvent("Must be in a Group for Chat!") } },
                         label = "GROUP CHAT",
                         icon = { Icon(Icons.Filled.Chat, "Chat Window") },
-                        enabled = isInGroup,
+                        enabled = isInActiveGroup,
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,
@@ -746,15 +484,15 @@ class MainScreen(private val navController: NavHostController) {
 
                     LabeledFab(
                         onClick = {
-                            if (isInGroup) {
-                                navController.navigate(NavRoutes.ADD_MAP_MARKER)
+                            if (isInActiveGroup) {
+                                viewModel.navigateToAddMapMarker()
                             } else {
-                                toastMessage("Must be in a Group to add markers!")
+                                viewModel.showToastEvent("Must be in a Group to add markers!")
                             }
                         },
                         label = "ADD MARKER",
                         icon = { Icon(Icons.Filled.LocationOn, "Add Marker") },
-                        enabled = isInGroup,
+                        enabled = isInActiveGroup,
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,
@@ -762,7 +500,7 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { navController.navigate(NavRoutes.CREATE_GROUP) },
+                        onClick = { viewModel.navigateToCreateGroup() },
                         label = "CREATE GROUP",
                         icon = { Icon(Icons.Filled.Add, "Create Group") },
                         enabled = true,
@@ -781,13 +519,13 @@ class MainScreen(private val navController: NavHostController) {
                             bottom = 16.dp + innerPadding.calculateBottomPadding()
                         ),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally // CHANGED: Centered horizontally
                 ) {
                     LabeledFab(
-                        onClick = { if (isInGroup) { toastMessage("Group Settings clicked!") } },
+                        onClick = { if (isInActiveGroup) { viewModel.showToastEvent("Group Settings clicked!") } else { viewModel.showToastEvent("Must be in a Group to access Group Settings!") } },
                         label = "GROUP SETTINGS",
                         icon = { Icon(Icons.Filled.Tune, "Group Settings") },
-                        enabled = isInGroup,
+                        enabled = isInActiveGroup,
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,
@@ -795,10 +533,10 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { if (isInGroup) { toastMessage("Group Status clicked!") } },
+                        onClick = { if (isInActiveGroup) { viewModel.showToastEvent("Group Status clicked!") } else { viewModel.showToastEvent("Must be in a Group to access Group Status!") } },
                         label = "GROUP STATUS",
                         icon = { Icon(Icons.Filled.Info, "Group Status") },
-                        enabled = isInGroup,
+                        enabled = isInActiveGroup,
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,
@@ -806,10 +544,10 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { if (isInGroup) { toastMessage("Send FCM Notification clicked!") } },
+                        onClick = { if (isInActiveGroup) { viewModel.showToastEvent("Send FCM Notification clicked!") } else { viewModel.showToastEvent("Must be in a Group to Send Alerts!") } },
                         label = "SEND ALERTS",
                         icon = { Icon(Icons.Filled.Notifications, "Send FCM Notification") },
-                        enabled = isInGroup,
+                        enabled = isInActiveGroup,
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,
@@ -817,10 +555,10 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { if (isInGroup) { navController.navigate(NavRoutes.GEOFENCE) } },
+                        onClick = { if (isInActiveGroup) { viewModel.navigateToGeofence() } else { viewModel.showToastEvent("Must be in a Group for Geofencing!") } },
                         label = "GEOFENCING",
                         icon = { Icon(Icons.Filled.Polyline, "Add GeoFence") },
-                        enabled = isInGroup,
+                        enabled = isInActiveGroup,
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,
@@ -829,15 +567,15 @@ class MainScreen(private val navController: NavHostController) {
 
                     LabeledFab(
                         onClick = {
-                            if (isInGroup) {
-                                navController.navigate(NavRoutes.TEAM_LIST)
+                            if (isInActiveGroup) {
+                                viewModel.navigateToTeamList()
                             } else {
-                                toastMessage("Must be in a Group to view Team List!")
+                                viewModel.showToastEvent("Must be in a Group to view Team List!")
                             }
                         },
                         label = "GROUP MEMBERS",
                         icon = { Icon(Icons.Filled.People, "Team List") },
-                        enabled = isInGroup,
+                        enabled = isInActiveGroup,
                         fabEnabledColor = fabEnabledColor,
                         fabDisabledColor = fabDisabledColor,
                         fabEnabledContentColor = fabEnabledContentColor,
@@ -845,7 +583,7 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { navController.navigate(NavRoutes.GROUPS_LIST) },
+                        onClick = { viewModel.navigateToGroupsList() },
                         label = "JOIN GROUPS",
                         icon = { Icon(Icons.Filled.Groups, "Groups List") },
                         enabled = true,
@@ -868,13 +606,13 @@ class MainScreen(private val navController: NavHostController) {
                             timestamp = currentMarkerInfo!!.timestamp,
                             speed = currentMarkerInfo!!.speed,
                             bearing = currentMarkerInfo!!.bearing,
-                            onDismissRequest = { showCustomMarkerInfoDialog = false },
+                            onDismissRequest = { viewModel.dismissMarkerInfoDialog() },
                             personUserId = currentMarkerInfo!!.userId
                         )
                     } else {
                         MapMarkerInfoDialog(
                             mapMarker = currentMarkerInfo!!.mapMarker!!,
-                            onDismissRequest = { showCustomMarkerInfoDialog = false }
+                            onDismissRequest = { viewModel.dismissMarkerInfoDialog() }
                         )
                     }
                 }
@@ -882,15 +620,13 @@ class MainScreen(private val navController: NavHostController) {
                 if (showExpiredGroupDialog && expiredGroupDialogMessage != null) {
                     AlertDialog(
                         onDismissRequest = {
-                            showExpiredGroupDialog = false
-                            groupMonitorService.clearUserMessage()
+                            viewModel.dismissExpiredGroupDialog()
                         },
                         title = { Text("Group Expired") },
                         text = { Text(expiredGroupDialogMessage!!) },
                         confirmButton = {
                             Button(onClick = {
-                                showExpiredGroupDialog = false
-                                groupMonitorService.clearUserMessage()
+                                viewModel.dismissExpiredGroupDialog()
                             }) {
                                 Text("OK")
                             }
@@ -899,6 +635,7 @@ class MainScreen(private val navController: NavHostController) {
                 }
             }
 
+            // Instructions overlay
             AnimatedVisibility(
                 visible = showInstructionsOverlay,
                 enter = fadeIn(),
@@ -920,20 +657,7 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     FloatingActionButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                showInstructionsOverlay = false
-                                currentUserModel?.let { user ->
-                                    val updatedUser = user.copy(mainInstructionsSeen = true)
-                                    firestoreService.saveUserProfile(updatedUser).onSuccess {
-                                        Log.d("MainScreen", "mainInstructionsSeen updated to true in Firestore.")
-                                        currentUserModel = updatedUser
-                                    }.onFailure { e ->
-                                        Log.e("MainScreen", "Failed to update mainInstructionsSeen: ${e.message}")
-                                    }
-                                }
-                            }
-                        },
+                        onClick = { viewModel.dismissInstructionsOverlay() },
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(top = 30.dp, end = 16.dp)
@@ -947,7 +671,8 @@ class MainScreen(private val navController: NavHostController) {
                 }
             }
 
-            if (showMapLoadingDialog) {
+            // Map Loading Dialog
+            if (showMapLoadingDialog && currentUserLocation == null) {
                 AlertDialog(
                     onDismissRequest = { },
                     properties = androidx.compose.ui.window.DialogProperties(
@@ -984,28 +709,6 @@ class MainScreen(private val navController: NavHostController) {
         }
     }
 
-    @SuppressLint("MissingPermission")
-    fun startLocationUpdates(
-        fusedLocationClient: FusedLocationProviderClient,
-        locationCallback: LocationCallback,
-        interval: Long
-    ) {
-        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
-            .setMinUpdateIntervalMillis(interval / 2)
-            .build()
-
-        try {
-            fusedLocationClient.requestLocationUpdates(
-                locationRequest,
-                locationCallback,
-                Looper.getMainLooper()
-            )
-            Log.d("MainScreen", "Started local GPS location updates with interval: $interval ms")
-        } catch (e: SecurityException) {
-            Log.e("MainScreen", "Local GPS location permission denied: ${e.message}")
-        }
-    }
-
     @Composable
     fun LabeledFab(
         onClick: () -> Unit,
@@ -1032,10 +735,11 @@ class MainScreen(private val navController: NavHostController) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 4.dp)
+                    .padding(bottom = 4.dp) // Maintain spacing from the FAB circle
                     .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
                     .background(if (enabled) fabEnabledColor else fabDisabledColor, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 0.dp, vertical = 0.dp)
+                // REMOVED .padding(horizontal = 1.dp, vertical = 1.dp) from this Box,
+                // as it's better to let the Text's intrinsic size define the box.
             ) {
                 Text(
                     text = label,
@@ -1043,19 +747,11 @@ class MainScreen(private val navController: NavHostController) {
                     fontSize = 8.sp,
                     lineHeight = 4.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 1.dp, vertical = 1.dp)
+                    textAlign = TextAlign.Center,
+                    // REMOVED .fillMaxWidth() to prevent labels from stretching
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp) // Apply padding directly to Text
                 )
             }
         }
-    }
-
-
-
-    fun stopLocationUpdates(
-        fusedLocationClient: FusedLocationProviderClient,
-        locationCallback: LocationCallback
-    ) {
-        fusedLocationClient.removeLocationUpdates(locationCallback)
-        Log.d("MainScreen", "Stopped local GPS location updates.")
     }
 }

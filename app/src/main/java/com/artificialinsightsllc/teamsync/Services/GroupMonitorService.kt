@@ -73,12 +73,19 @@ class GroupMonitorService(
     private val _groupDetailsStatus = MutableStateFlow(GroupDetailsStatus.LOADING)
     val groupDetailsStatus: StateFlow<GroupDetailsStatus> = _groupDetailsStatus.asStateFlow()
 
+    // NEW: StateFlow for the current user's live location
+    private val _currentUserLocation = MutableStateFlow<Locations?>(null)
+    val currentUserLocation: StateFlow<Locations?> = _currentUserLocation.asStateFlow()
+
 
     private var currentUserGroupMembershipsListener: ListenerRegistration? = null
     private var currentUserProfileListener: ListenerRegistration? = null
     private var activeGroupDetailsListener: ListenerRegistration? = null
     private var activeGroupUsersLocationsListener: ListenerRegistration? = null // Corrected name for scalable location queries
     private var otherMembersProfilesListeners: MutableMap<String, ListenerRegistration> = mutableMapOf()
+
+    // NEW: Listener for the current user's location
+    private var currentUserLocationListener: ListenerRegistration? = null
 
     private val _uiPermissionsGranted = MutableStateFlow(false)
     val uiPermissionsGranted: StateFlow<Boolean> = _uiPermissionsGranted.asStateFlow()
@@ -136,6 +143,10 @@ class GroupMonitorService(
         currentUserProfileListener = null
         activeGroupDetailsListener?.remove()
         activeGroupDetailsListener = null
+        // NEW: Stop the current user's location listener
+        currentUserLocationListener?.remove()
+        currentUserLocationListener = null
+
 
         // Stop all map-related data listeners for other members
         stopMapRelatedListeners()
@@ -151,6 +162,7 @@ class GroupMonitorService(
         _otherMembersLocations.value = emptyList() // Ensure map locations are cleared
         _otherMembersProfiles.value = emptyMap() // Ensure map profiles are cleared
         _effectiveLocationUpdateInterval.value = 300000L // Reset to default
+        _currentUserLocation.value = null // NEW: Clear current user's location
 
         lastProcessedActiveGroupId = null // Reset this on full stop
         locationTrackingIntentJob?.cancel() // Cancel any pending intent dispatches
@@ -223,6 +235,8 @@ class GroupMonitorService(
                         // These two calls are the main drivers for managing group state and tracking:
                         listenForCurrentUserProfile(user.uid) // This drives the active group logic and map listeners
                         listenForCurrentUserGroupMemberships(user.uid) // This provides the full list of user's memberships for other screens
+                        // NEW: Listen for the current user's location
+                        listenForCurrentUserLocation(user.uid)
                     }
                 } else {
                     Log.d("GroupMonitorService", "Auth State Listener: User logged out. Stopping all monitoring.")
@@ -238,6 +252,8 @@ class GroupMonitorService(
                 monitorScope.launch {
                     listenForCurrentUserProfile(initialUser.uid)
                     listenForCurrentUserGroupMemberships(initialUser.uid)
+                    // NEW: Listen for the current user's location on initial load too
+                    listenForCurrentUserLocation(initialUser.uid)
                 }
             } else {
                 Log.d("GroupMonitorService", "startMonitoring: No user logged in on initial call. Waiting for AuthStateListener.")
@@ -372,6 +388,7 @@ class GroupMonitorService(
                     activeGroupDetailsListener = null
                     _otherMembersLocations.value = emptyList() // Clear map-related data
                     _otherMembersProfiles.value = emptyMap()
+                    _currentUserLocation.value = null // NEW: Clear current user's location
                     return@addSnapshotListener
                 }
 
@@ -422,6 +439,7 @@ class GroupMonitorService(
                                     activeGroupDetailsListener = null
                                     _otherMembersLocations.value = emptyList() // Clear map-related data
                                     _otherMembersProfiles.value = emptyMap()
+                                    _currentUserLocation.value = null // NEW: Clear current user's location
                                     // Clear selectedActiveGroupId in user profile in Firestore
                                     monitorScope.launch {
                                         firestoreService.updateUserSelectedActiveGroup(userId, null)
@@ -444,6 +462,7 @@ class GroupMonitorService(
                             activeGroupDetailsListener = null
                             _otherMembersLocations.value = emptyList() // Clear map-related data
                             _otherMembersProfiles.value = emptyMap()
+                            _currentUserLocation.value = null // NEW: Clear current user's location
                         }
                     } else {
                         Log.d("GroupMonitorService", "Selected active group ID unchanged ($newSelectedActiveGroupId). No re-evaluation of active group state needed.")
@@ -476,6 +495,7 @@ class GroupMonitorService(
                             activeGroupDetailsListener = null
                             _otherMembersLocations.value = emptyList() // Clear map-related data
                             _otherMembersProfiles.value = emptyMap()
+                            _currentUserLocation.value = null // NEW: Clear current user's location
                         }
                     }
                 } else {
@@ -494,6 +514,7 @@ class GroupMonitorService(
                     activeGroupDetailsListener = null
                     _otherMembersLocations.value = emptyList() // Clear map-related data
                     _otherMembersProfiles.value = emptyMap()
+                    _currentUserLocation.value = null // NEW: Clear current user's location
                 }
             }
     }
@@ -628,6 +649,36 @@ class GroupMonitorService(
     }
 
     /**
+     * NEW: Listens for the current user's location from the `current_user_locations` collection.
+     * This provides a dedicated stream for the authenticated user's own location.
+     */
+    private fun listenForCurrentUserLocation(userId: String) {
+        currentUserLocationListener?.remove() // Remove any old listener
+
+        Log.d("GroupMonitorService", "listenForCurrentUserLocation: Attaching listener for current user's location: $userId.")
+
+        currentUserLocationListener = db.collection("current_user_locations").document(userId)
+            .addSnapshotListener { snapshot, e ->
+                Log.d("GroupMonitorService", "listenForCurrentUserLocation: Snapshot received for user $userId. Exists: ${snapshot?.exists()}, Error: ${e?.message}")
+                if (e != null) {
+                    Log.w("GroupMonitorService", "Listen for current user's location failed.", e)
+                    _currentUserLocation.value = null
+                    return@addSnapshotListener
+                }
+
+                if (snapshot != null && snapshot.exists()) {
+                    val location = snapshot.toObject(Locations::class.java)
+                    _currentUserLocation.value = location
+                    Log.d("GroupMonitorService", "Updated current user's location: ${location?.latitude}, ${location?.longitude}")
+                } else {
+                    _currentUserLocation.value = null
+                    Log.d("GroupMonitorService", "Current user's location document not found or cleared for $userId.")
+                }
+            }
+    }
+
+
+    /**
      * NEW: Listens for the current location of users who are actively tracking for the specified group.
      * This uses the scalable `whereEqualTo("activeTrackingGroupId", groupId)` query.
      */
@@ -660,7 +711,7 @@ class GroupMonitorService(
                     val activeLocations = snapshots.documents.mapNotNull { doc ->
                         doc.toObject(Locations::class.java)
                     }.filter {
-                        // Filter out current user's location
+                        // Filter out current user's location, as it's now provided by _currentUserLocation
                         it.userId != currentUserId
                     }
                     _otherMembersLocations.value = activeLocations

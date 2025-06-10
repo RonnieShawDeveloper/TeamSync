@@ -817,7 +817,7 @@ class MainScreen(private val navController: NavHostController) {
                     )
 
                     LabeledFab(
-                        onClick = { if (isInGroup) { toastMessage("Add GeoFence clicked!") } },
+                        onClick = { if (isInGroup) { navController.navigate(NavRoutes.GEOFENCE) } },
                         label = "GEOFENCING",
                         icon = { Icon(Icons.Filled.Polyline, "Add GeoFence") },
                         enabled = isInGroup,

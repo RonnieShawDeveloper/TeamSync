@@ -96,6 +96,9 @@ dependencies {
     implementation("com.google.maps.android:maps-compose:4.3.0") // Or the latest stable version
     implementation("com.google.android.gms:play-services-maps:19.2.0") // Or the latest stable version
 
+    // Google Maps AndroidUtils (for Polylines, Markers, etc.)
+    implementation("com.google.maps.android:maps-utils-ktx:3.4.0") // <-- ADD THIS LINE
+
     // Google Location Services (FusedLocationProviderClient)
     implementation("com.google.android.gms:play-services-location:21.3.0") // Or the latest stable version
 

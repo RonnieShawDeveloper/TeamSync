@@ -11,7 +11,9 @@ object NavRoutes {
     const val GROUPS_LIST = "groups_list"
     const val TEAM_LIST = "team_list"
     const val ADD_MAP_MARKER = "add_map_marker"
-    const val TRAVEL_REPORT = "travel_report/{userId}/{timeRangeMillis}" // UPDATED: Added timeRangeMillis argument
+    const val TRAVEL_REPORT = "travel_report/{userId}/{timeRangeMillis}"
     const val USER_SETTINGS = "user_settings"
     const val SHUTDOWN = "shutdown"
+    const val GEOFENCE = "geofence"
+    const val CREATE_GEOFENCE = "create_geofence" // NEW: Add this route
 }

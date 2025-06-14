@@ -3,6 +3,7 @@ package com.artificialinsightsllc.teamsync
 
 import android.app.Application
 import android.app.Activity
+import android.net.Uri // NEW: Import Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,8 +17,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import com.artificialinsightsllc.teamsync.Database.AppDatabase // NEW: Import AppDatabase
-import com.artificialinsightsllc.teamsync.Database.NotificationRepository // NEW: Import NotificationRepository
+import com.artificialinsightsllc.teamsync.Database.AppDatabase
+import com.artificialinsightsllc.teamsync.Database.NotificationRepository
+import com.artificialinsightsllc.teamsync.Models.NotificationEntity // NEW: Import NotificationEntity
+import kotlinx.coroutines.CoroutineScope // NEW: Import CoroutineScope
+import kotlinx.coroutines.SupervisorJob // NEW: Import SupervisorJob
+import kotlinx.coroutines.Dispatchers // NEW: Import Dispatchers
+import kotlinx.coroutines.launch // NEW: Import launch
+import kotlinx.coroutines.flow.filterNotNull // NEW: Import filterNotNull
+import kotlinx.coroutines.flow.first // NEW: Import first
 
 
 // Implement Application.ActivityLifecycleCallbacks to track app foreground/background state
@@ -29,7 +37,6 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
     lateinit var markerMonitorService: MarkerMonitorService
         private set
 
-    // NEW: Declare NotificationRepository
     lateinit var notificationRepository: NotificationRepository
         private set
 
@@ -44,41 +51,68 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
     private val handler = Handler(Looper.getMainLooper())
     private var backgroundDetectionRunnable: Runnable? = null
 
-    // NEW: MutableStateFlow to hold the combined state of LocationTrackingService
-    // This allows GroupMonitorService to observe these states as Flows.
-    // Triple<Boolean, Long, String?> represents <isRunning, interval, memberId>
+    // MutableStateFlow to hold the combined state of LocationTrackingService
     private val _locationServiceRunningState = MutableStateFlow(Triple(false, 0L, null as String?))
     val locationServiceRunningState: StateFlow<Triple<Boolean, Long, String?>> = _locationServiceRunningState.asStateFlow()
 
+    // NEW: StateFlow to hold a pending notification received on cold start (from MainActivity)
+    private val _pendingNotificationForSave = MutableStateFlow<NotificationEntity?>(null)
+
+    // NEW: Optional - to hold deep link URI, if we ever want to explicitly navigate to it later
+    private val _pendingDeepLinkUri = MutableStateFlow<Uri?>(null)
+    val pendingDeepLinkUri: StateFlow<Uri?> = _pendingDeepLinkUri.asStateFlow() // Expose as StateFlow
+
+
     /**
      * Updates the internal state variables reflecting the LocationTrackingService's status.
-     * This method is called by the LocationTrackingService itself.
-     * @param running True if the service is actively running and tracking.
-     * @param interval The current tracking interval.
-     * @param memberId The current active group member ID being tracked.
      */
     internal fun setLocationServiceState(running: Boolean, interval: Long, memberId: String?) {
         _locationServiceRunningState.update { Triple(running, interval, memberId) }
         Log.d("TeamSyncApplication", "setLocationServiceState updated to: Running=$running, Interval=$interval, MemberId=$memberId")
     }
 
+    /**
+     * Call this from MainActivity to set a pending deep link URI.
+     */
+    fun setPendingDeepLink(uri: Uri?) {
+        _pendingDeepLinkUri.value = uri
+    }
+
+    /**
+     * Call this from MainActivity to set a notification entity received on launch (cold start).
+     */
+    fun setPendingNotificationForSave(notification: NotificationEntity?) {
+        _pendingNotificationForSave.value = notification
+    }
+
 
     override fun onCreate() {
         super.onCreate()
         Log.d("TeamSyncApplication", "Application onCreate: Initializing services.")
-        // Register activity lifecycle callbacks
         registerActivityLifecycleCallbacks(this)
 
         markerMonitorService = MarkerMonitorService()
         groupMonitorService = GroupMonitorService(applicationContext, markerMonitorService = markerMonitorService)
 
-        // NEW: Initialize NotificationRepository
         val database = AppDatabase.getDatabase(applicationContext)
         notificationRepository = NotificationRepository(database.notificationDao())
 
-        // NEW: Call startMonitoring here, in the Application's onCreate.
-        // This ensures the GroupMonitorService's AuthStateListener is attached very early
-        // in the app's lifecycle, allowing it to reliably pick up Firebase Auth changes.
+        // NEW: CoroutineScope for application-level background tasks
+        val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        // NEW: Observe _pendingNotificationForSave and insert into DB once repository is ready
+        applicationScope.launch {
+            _pendingNotificationForSave.filterNotNull().collect { notificationToSave ->
+                try {
+                    notificationRepository.insertNotification(notificationToSave)
+                    Log.d("TeamSyncApplication", "Successfully saved pending notification from cold start: ${notificationToSave.title}")
+                    _pendingNotificationForSave.value = null // Clear after saving
+                } catch (e: Exception) {
+                    Log.e("TeamSyncApplication", "Failed to save pending notification from cold start: ${e.message}", e)
+                }
+            }
+        }
+
         groupMonitorService.startMonitoring()
         Log.d("TeamSyncApplication", "GroupMonitorService.startMonitoring() called from Application onCreate.")
     }
@@ -86,11 +120,10 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
     override fun onTerminate() {
         super.onTerminate()
         Log.d("TeamSyncApplication", "Application onTerminate: Shutting down services.")
-        // Unregister activity lifecycle callbacks
         unregisterActivityLifecycleCallbacks(this)
         groupMonitorService.shutdown()
         markerMonitorService.shutdown()
-        // No explicit shutdown needed for Room, it manages its own lifecycle.
+        // Room database manages its own lifecycle, no explicit shutdown needed here.
     }
 
     // --- Activity Lifecycle Callback Implementations ---
@@ -102,33 +135,28 @@ class TeamSyncApplication : Application(), Application.ActivityLifecycleCallback
     override fun onActivityStarted(activity: Activity) {
         activityCount++
         Log.d("AppStatus", "onActivityStarted: ${activity.javaClass.simpleName}, Count: $activityCount")
-        // If coming from background, cancel any pending background detection
         backgroundDetectionRunnable?.let { handler.removeCallbacks(it) }
-        isAppInForeground = true // Immediately set to foreground as an activity started
+        isAppInForeground = true
     }
 
     override fun onActivityResumed(activity: Activity) {
         Log.d("AppStatus", "onActivityResumed: ${activity.javaClass.simpleName}")
-        // isAppInForeground is already true from onActivityStarted
     }
 
     override fun onActivityPaused(activity: Activity) {
         Log.d("AppStatus", "onActivityPaused: ${activity.javaClass.simpleName}")
-        // Set a delayed runnable to check if app goes to background
         backgroundDetectionRunnable = Runnable {
-            if (activityCount == 0) { // No activities left started
+            if (activityCount == 0) {
                 isAppInForeground = false
                 Log.d("AppStatus", "App detected as in background")
             }
         }
-        // Small delay to account for quick activity transitions within the app
-        handler.postDelayed(backgroundDetectionRunnable!!, 500) // 500ms delay
+        handler.postDelayed(backgroundDetectionRunnable!!, 500)
     }
 
     override fun onActivityStopped(activity: Activity) {
         activityCount--
         Log.d("AppStatus", "onActivityStopped: ${activity.javaClass.simpleName}, Count: $activityCount")
-        // onActivityPaused would have scheduled the check
     }
 
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {

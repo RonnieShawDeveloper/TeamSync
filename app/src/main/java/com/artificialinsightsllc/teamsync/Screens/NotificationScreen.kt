@@ -76,15 +76,16 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import androidx.navigation.compose.currentBackStackEntryAsState // NEW: Import currentBackStackEntryAsState
+import androidx.navigation.compose.currentBackStackEntryAsState
 import com.artificialinsightsllc.teamsync.Models.NotificationEntity
+import com.artificialinsightsllc.teamsync.Models.NotificationType // NEW: Import NotificationType
 import com.artificialinsightsllc.teamsync.R
 import com.artificialinsightsllc.teamsync.ViewModels.NotificationViewModel
 import com.artificialinsightsllc.teamsync.ui.theme.DarkBlue
 import com.artificialinsightsllc.teamsync.ui.theme.LightCream
 import com.google.firebase.auth.FirebaseAuth
 import com.artificialinsightsllc.teamsync.Services.GroupMonitorService
-import com.artificialinsightsllc.teamsync.Services.TeamSyncFirebaseMessagingService // NEW: Import TeamSyncFirebaseMessagingService
+import com.artificialinsightsllc.teamsync.Services.TeamSyncFirebaseMessagingService
 import com.artificialinsightsllc.teamsync.TeamSyncApplication
 import kotlinx.coroutines.launch
 
@@ -97,7 +98,6 @@ class NotificationScreen(private val navController: NavHostController) {
         val coroutineScope = rememberCoroutineScope()
         val auth = remember { FirebaseAuth.getInstance() }
 
-        // NEW: Get notificationId from navigation arguments
         val navBackStackEntry by navController.currentBackStackEntryAsState()
         val notificationIdFromDeepLink = navBackStackEntry?.arguments?.getInt(TeamSyncFirebaseMessagingService.NOTIFICATION_ID_PARAM) ?: -1
 
@@ -105,7 +105,7 @@ class NotificationScreen(private val navController: NavHostController) {
         val notifications by viewModel.notifications.collectAsStateWithLifecycle()
         var showScreen by remember { mutableStateOf(false) }
 
-        var selectedTab by remember { mutableIntStateOf(0) }
+        var selectedTab by remember { mutableIntStateOf(0) } // 0 for Group, 1 for Individual
         var notificationMessage by remember { mutableStateOf("") }
         var showConfirmDeleteAllDialog by remember { mutableStateOf(false) }
 
@@ -116,18 +116,30 @@ class NotificationScreen(private val navController: NavHostController) {
 
 
         LaunchedEffect(Unit) {
-            showScreen = true // Trigger slide-in animation
+            showScreen = true
         }
 
-        // NEW: Handle incoming notificationId from deep link
         LaunchedEffect(notificationIdFromDeepLink) {
             if (notificationIdFromDeepLink != -1) {
-                // Mark as read if it came from a deep link
                 viewModel.markNotificationAsRead(notificationIdFromDeepLink)
-                // Optionally, you could also scroll to this item in the LazyColumn
-                // (Requires a LazyListState and more complex logic for scrolling,
-                // which is outside the scope of this step, but possible.)
                 Log.d("NotificationScreen", "Deep link opened with notification ID: $notificationIdFromDeepLink. Marked as read.")
+            }
+        }
+
+        // NEW: Filter notifications based on selected tab
+        val filteredNotifications = remember(notifications, selectedTab) {
+            notifications.filter { notification ->
+                when (selectedTab) {
+                    // Group Notifications Tab
+                    0 -> notification.type == NotificationType.GROUP_MESSAGE ||
+                            notification.type == NotificationType.ALERT || // Alerts can be group wide
+                            notification.type == NotificationType.SENT_MESSAGE_SIMULATED // Show sent messages in group context
+                    // Individual Notifications Tab
+                    1 -> notification.type == NotificationType.DIRECT_MESSAGE ||
+                            notification.type == NotificationType.SYSTEM_MESSAGE || // System messages are usually individual
+                            (notification.type == NotificationType.ALERT && notification.groupId == null) // Personal alerts
+                    else -> false // Should not happen
+                }
             }
         }
 
@@ -215,7 +227,7 @@ class NotificationScreen(private val navController: NavHostController) {
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f))
                         ) {
-                            if (notifications.isEmpty()) {
+                            if (filteredNotifications.isEmpty()) { // NEW: Use filteredNotifications
                                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     Text(
                                         text = "No notifications to display.",
@@ -231,7 +243,7 @@ class NotificationScreen(private val navController: NavHostController) {
                                     contentPadding = PaddingValues(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    items(notifications) { notification ->
+                                    items(filteredNotifications) { notification -> // NEW: Use filteredNotifications
                                         NotificationItem(
                                             notification = notification,
                                             onMarkRead = { viewModel.markNotificationAsRead(it) },
@@ -333,7 +345,7 @@ class NotificationScreen(private val navController: NavHostController) {
                                                                     title = "Sent to Group: ${activeGroup?.groupName}",
                                                                     body = notificationMessage,
                                                                     timestamp = System.currentTimeMillis(),
-                                                                    type = "GROUP_MESSAGE_SENT",
+                                                                    type = NotificationType.SENT_MESSAGE_SIMULATED, // NEW: Use SENT_MESSAGE_SIMULATED type
                                                                     senderId = currentUserId,
                                                                     groupId = groupId,
                                                                     isRead = true,
@@ -399,7 +411,12 @@ class NotificationScreen(private val navController: NavHostController) {
         onMarkRead: (Int) -> Unit,
         onDelete: (Int) -> Unit
     ) {
-        val backgroundColor = if (notification.isRead) Color.White.copy(alpha = 0.7f) else LightCream
+        // Determine background color based on read status and if it's a simulated sent message
+        val backgroundColor = when {
+            notification.isRead -> Color.White.copy(alpha = 0.7f)
+            notification.type == NotificationType.SENT_MESSAGE_SIMULATED -> Color(0xFFE0E0E0).copy(alpha = 0.7f) // Slightly darker for sent
+            else -> LightCream // Unread received messages
+        }
         val textColor = DarkBlue
         val timestampText = com.artificialinsightsllc.teamsync.Helpers.TimeFormatter.getRelativeTimeSpanString(notification.timestamp)
 
@@ -417,8 +434,17 @@ class NotificationScreen(private val navController: NavHostController) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // NEW: Display type prefix for clarity (e.g., "[Group] Title")
+                    val titlePrefix = when (notification.type) {
+                        NotificationType.GROUP_MESSAGE -> "[Group] "
+                        NotificationType.DIRECT_MESSAGE -> "[Direct] "
+                        NotificationType.ALERT -> "[Alert] "
+                        NotificationType.SYSTEM_MESSAGE -> "[System] "
+                        NotificationType.SENT_MESSAGE_SIMULATED -> "[Sent] "
+                        else -> ""
+                    }
                     Text(
-                        text = notification.title ?: "No Title",
+                        text = "$titlePrefix${notification.title ?: "No Title"}", // NEW: Add prefix
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = textColor,

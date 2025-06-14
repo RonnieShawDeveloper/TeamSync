@@ -34,7 +34,8 @@ import androidx.compose.ui.graphics.toArgb // Import toArgb extension function
 object MarkerIconHelper {
 
     // Helper function to convert a drawable resource to a Bitmap
-    private fun drawableToBitmap(context: Context, @DrawableRes drawableId: Int, sizePx: Int): Bitmap {
+    // CHANGED: Made public to be accessible from MainScreen
+    fun drawableToBitmap(context: Context, @DrawableRes drawableId: Int, sizePx: Int): Bitmap {
         val drawable = ContextCompat.getDrawable(context, drawableId) // Use ContextCompat
         val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -210,6 +211,20 @@ object MarkerIconHelper {
             bitmapDescriptor = BitmapDescriptorFactory.fromBitmap(bitmap)
         }
         return bitmapDescriptor
+    }
+
+    // CHANGED: Made public to be accessible from MainScreen
+    fun bitmapDescriptorFromVector(context: Context, @DrawableRes vectorResId: Int): BitmapDescriptor {
+        val vectorDrawable = ContextCompat.getDrawable(context, vectorResId)
+        vectorDrawable?.setBounds(0, 0, vectorDrawable.intrinsicWidth, vectorDrawable.intrinsicHeight)
+        val bitmap = Bitmap.createBitmap(
+            vectorDrawable?.intrinsicWidth ?: 1,
+            vectorDrawable?.intrinsicHeight ?: 1,
+            Bitmap.Config.ARGB_8888
+        )
+        val canvas = Canvas(bitmap)
+        vectorDrawable?.draw(canvas)
+        return BitmapDescriptorFactory.fromBitmap(bitmap)
     }
 }
 

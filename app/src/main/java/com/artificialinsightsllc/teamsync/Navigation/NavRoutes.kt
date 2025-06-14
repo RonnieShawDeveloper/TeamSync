@@ -14,7 +14,17 @@ object NavRoutes {
     const val TRAVEL_REPORT = "travel_report/{userId}/{timeRangeMillis}"
     const val USER_SETTINGS = "user_settings"
     const val SHUTDOWN = "shutdown"
-    const val GEOFENCE = "geofence"
-    const val CREATE_GEOFENCE = "create_geofence"
-    const val NOTIFICATIONS = "notifications" // NEW: Add this route for the Notifications screen
+    // REMOVED: const val GEOFENCE = "geofence" // This was the old placeholder GeofenceScreen route
+    // REMOVED: const val CREATE_GEOFENCE = "create_geofence" // This was the old placeholder CreateGeofenceScreen route
+    const val NOTIFICATIONS = "notifications"
+    const val GROUP_CHAT = "group_chat"
+    const val GROUP_STATUS = "group_status"
+
+    // NEW: Geofence Management Routes
+    const val GEOFENCE_MANAGEMENT = "geofence_management" // New route for GeofenceManagementScreen
+    const val CREATE_GEOFENCE_DRAW = "create_geofence_draw" // Route for the future geofence drawing screen
+    // TODO: Add routes for Geofence/Rule/Assignment details/edit screens
+    // TODO: Add routes for Incident details/creation/management screens
+    // TODO: Add routes for Geofence Packages screen
+    // TODO: Add routes for Group Settings screen (if separate from UserSettings)
 }

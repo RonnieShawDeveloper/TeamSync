@@ -1,3 +1,4 @@
+// In file: app/build.gradle.kts
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -14,7 +15,7 @@ android {
         minSdk = 29
         targetSdk = 35
         versionCode = 1
-        versionName = "6.6"
+        versionName = "7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -115,6 +116,9 @@ dependencies {
 
     // Google Location Services (FusedLocationProviderClient)
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // SwipeRefresh for Compose (Removed separate indicator dependency)
+    implementation("com.google.accompanist:accompanist-swiperefresh:0.28.0")
 
     // For logging (if not already present)
     implementation("androidx.compose.ui:ui-tooling-preview")

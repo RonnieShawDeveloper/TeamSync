@@ -1,3 +1,4 @@
+// In file: app/src/main/java/com/artificialinsightsllc/teamsync/ViewModels/MainViewModel.kt
 package com.artificialinsightsllc.teamsync.ViewModels
 
 import android.app.Application
@@ -24,7 +25,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import com.google.android.gms.maps.model.CameraPosition
-import com.artificialinsightsllc.teamsync.Navigation.NavRoutes // NEW: Import NavRoutes
+import com.artificialinsightsllc.teamsync.Navigation.NavRoutes
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -35,6 +38,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val markerMonitorService: MarkerMonitorService = app.markerMonitorService
     private val firestoreService: FirestoreService = FirestoreService()
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+
+    // NEW: Inject GroupChatViewModel for badge updates and navigation
+    private val groupChatViewModel: GroupChatViewModel = GroupChatViewModel(application)
+
 
     // UI State exposed to MainScreen
     private val _currentUserId = MutableStateFlow<String?>(null)
@@ -94,6 +101,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _lastKnownCameraPosition = MutableStateFlow<CameraPosition?>(null)
     val lastKnownCameraPosition: StateFlow<CameraPosition?> = _lastKnownCameraPosition.asStateFlow()
 
+    // NEW: Expose new chat messages count from GroupChatViewModel
+    val newChatMessagesCount: StateFlow<Int> = groupChatViewModel.newMessagesCount
 
     data class MarkerDisplayInfo(
         val title: String,
@@ -112,6 +121,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         Log.d("MainViewModel", "MainViewModel initialized.")
 
+        // Listen to Auth state changes
         auth.addAuthStateListener { firebaseAuth ->
             _currentUserId.value = firebaseAuth.currentUser?.uid
             Log.d("MainViewModel", "Auth state changed, currentUserId: ${_currentUserId.value}")
@@ -126,6 +136,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _showMapLoadingDialog.value = false
                 _showInstructionsOverlay.value = false
                 _lastKnownCameraPosition.value = null
+                // Ensure GroupChatViewModel also clears its state if MainViewModel is re-initialized due to logout
+                // or if it needs specific cleanup on logout
+                groupChatViewModel.markChatAsSeen() // Resets count on logout/re-init
             }
         }
         _currentUserId.value = auth.currentUser?.uid
@@ -295,6 +308,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         groupMonitorService.clearUserMessage()
     }
 
+    // NEW: Function to trigger new message count check in GroupChatViewModel
+    fun checkForNewChatMessagesForBadge() {
+        groupChatViewModel.checkForNewMessagesForBadge()
+    }
+
     // Navigation functions
     fun navigateToShutdown() {
         viewModelScope.launch { _navigationEvent.emit(NavRoutes.SHUTDOWN) }
@@ -312,8 +330,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { _navigationEvent.emit(NavRoutes.CREATE_GROUP) }
     }
 
+    // UPDATED: Navigate to GEOFENCE_MANAGEMENT instead of old GEOFENCE route
     fun navigateToGeofence() {
-        viewModelScope.launch { _navigationEvent.emit(NavRoutes.GEOFENCE) }
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.GEOFENCE_MANAGEMENT) }
     }
 
     fun navigateToTeamList() {
@@ -324,8 +343,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { _navigationEvent.emit(NavRoutes.GROUPS_LIST) }
     }
 
-    // NEW: Navigation function for NotificationsScreen
     fun navigateToNotifications() {
-        viewModelScope.launch { _navigationEvent.emit(NavRoutes.NOTIFICATIONS) } // Will be defined in NavRoutes.kt
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.NOTIFICATIONS) }
+    }
+
+    // NEW: Navigation function for GroupChatScreen
+    fun navigateToGroupChat() {
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.GROUP_CHAT) }
+    }
+
+    // NEW: Navigation function for GroupStatusScreen
+    fun navigateToGroupStatus() {
+        viewModelScope.launch { _navigationEvent.emit(NavRoutes.GROUP_STATUS) }
     }
 }
